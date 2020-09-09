@@ -10,18 +10,15 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net/url"
 	nurl "net/url"
 	"strconv"
 	"strings"
-)
 
-import (
 	"github.com/go-sql-driver/mysql"
-	"github.com/hashicorp/go-multierror"
-)
-
-import (
 	"github.com/golang-migrate/migrate/v4/database"
+	"github.com/hashicorp/go-multierror"
+	"github.com/pkg/errors"
 )
 
 func init() {
@@ -117,7 +114,48 @@ func extractCustomQueryParams(c *mysql.Config) (map[string]string, error) {
 	return customQueryParams, nil
 }
 
+// extractDSNParam extracts the value of a param specified in the
+// DSN string.
+func extractDSNParam(queryString, param string) (string, error) {
+	for _, v := range strings.Split(queryString, "&") {
+		p := strings.SplitN(v, "=", 2)
+		if len(p) != 2 {
+			continue
+		}
+		if p[0] == param {
+			return url.QueryUnescape(p[1])
+		}
+	}
+	return "", nil
+}
+
+// shouldPreregisterTLSConfig preregisters a config with the supplied tls name, if not using a default config.
+// If the user is supplying a custom tls configuration, preregister a config with that name,
+// i.e. needing to supply certs using the `x-tls-*` query params in the DSN. This avoids the errors
+// occuring when making the call to mysql.ParseDSN() which tries to lookup the tls config and throws
+// an error if it doesn't exist.
+func shouldPreregisterTLSConfig(ctls string) error {
+	switch ctls {
+	case "true", "false", "skip-verify", "preferred", "":
+		return nil
+	default:
+		return mysql.RegisterTLSConfig(ctls, &tls.Config{})
+	}
+}
+
 func urlToMySQLConfig(url string) (*mysql.Config, error) {
+	queryParams := strings.Split(url, "?")
+	if len(queryParams) > 1 {
+		tlsConfig, err := extractDSNParam(queryParams[1], "tls")
+		if err != nil {
+			return nil, errors.Wrap(err, "extracting `tls` DSN param")
+		}
+		err = shouldPreregisterTLSConfig(tlsConfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	config, err := mysql.ParseDSN(strings.TrimPrefix(url, "mysql://"))
 	if err != nil {
 		return nil, err
