@@ -13,15 +13,11 @@ import (
 	nurl "net/url"
 	"strconv"
 	"strings"
-)
 
-import (
 	"github.com/go-sql-driver/mysql"
-	"github.com/hashicorp/go-multierror"
-)
-
-import (
 	"github.com/golang-migrate/migrate/v4/database"
+	"github.com/hashicorp/go-multierror"
+	"github.com/pkg/errors"
 )
 
 func init() {
@@ -117,66 +113,46 @@ func extractCustomQueryParams(c *mysql.Config) (map[string]string, error) {
 	return customQueryParams, nil
 }
 
+// extractDSNParam extracts the value of a param specified in the
+// DSN string.
+func extractDSNParam(queryString, param string) (string, error) {
+	for _, v := range strings.Split(queryString, "&") {
+		p := strings.SplitN(v, "=", 2)
+		if len(p) != 2 {
+			continue
+		}
+		if p[0] == param {
+			return nurl.QueryUnescape(p[1])
+		}
+	}
+	return "", nil
+}
+
+// ensureRegisteredTLSConfig registers a config with the supplied tls name, if not using a default config.
+// If the user is supplying a custom tls configuration, i.e. needing to supply certs using the `x-tls-*`
+// query params in the DSN, we pre-register an empty config with that name,. This avoids the errors
+// occurring when making the call to mysql.ParseDSN() which tries to lookup the tls config and throws
+// an error if it doesn't exist.
+func ensureRegisteredTLSConfig(ctls string) error {
+	switch ctls {
+	case "true", "false", "skip-verify", "preferred", "":
+		return nil
+	default:
+		return mysql.RegisterTLSConfig(ctls, &tls.Config{})
+	}
+}
+
 func urlToMySQLConfig(url string) (*mysql.Config, error) {
-	// Need to parse out custom TLS parameters and call
-	// mysql.RegisterTLSConfig() before mysql.ParseDSN() is called
-	// which consumes the registered tls.Config
-	// Fixes: https://github.com/golang-migrate/migrate/issues/411
-	//
-	// Can't use url.Parse() since it fails to parse MySQL DSNs
-	// mysql.ParseDSN() also searches for "?" to find query parameters:
-	// https://github.com/go-sql-driver/mysql/blob/46351a8/dsn.go#L344
-	if idx := strings.LastIndex(url, "?"); idx > 0 {
-		rawParams := url[idx+1:]
-		parsedParams, err := nurl.ParseQuery(rawParams)
+	dsn := strings.Split(url, "?")
+	if len(dsn) > 1 {
+		dsnParams := dsn[1]
+		tlsConfig, err := extractDSNParam(dsnParams, "tls")
+		if err != nil {
+			return nil, errors.Wrap(err, "extracting `tls` DSN param")
+		}
+		err = ensureRegisteredTLSConfig(tlsConfig)
 		if err != nil {
 			return nil, err
-		}
-
-		ctls := parsedParams.Get("tls")
-		if len(ctls) > 0 {
-			if _, isBool := readBool(ctls); !isBool && strings.ToLower(ctls) != "skip-verify" {
-				rootCertPool := x509.NewCertPool()
-				pem, err := ioutil.ReadFile(parsedParams.Get("x-tls-ca"))
-				if err != nil {
-					return nil, err
-				}
-
-				if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
-					return nil, ErrAppendPEM
-				}
-
-				clientCert := make([]tls.Certificate, 0, 1)
-				if ccert, ckey := parsedParams.Get("x-tls-cert"), parsedParams.Get("x-tls-key"); ccert != "" || ckey != "" {
-					if ccert == "" || ckey == "" {
-						return nil, ErrTLSCertKeyConfig
-					}
-					certs, err := tls.LoadX509KeyPair(ccert, ckey)
-					if err != nil {
-						return nil, err
-					}
-					clientCert = append(clientCert, certs)
-				}
-
-				insecureSkipVerify := false
-				insecureSkipVerifyStr := parsedParams.Get("x-tls-insecure-skip-verify")
-				if len(insecureSkipVerifyStr) > 0 {
-					x, err := strconv.ParseBool(insecureSkipVerifyStr)
-					if err != nil {
-						return nil, err
-					}
-					insecureSkipVerify = x
-				}
-
-				err = mysql.RegisterTLSConfig(ctls, &tls.Config{
-					RootCAs:            rootCertPool,
-					Certificates:       clientCert,
-					InsecureSkipVerify: insecureSkipVerify,
-				})
-				if err != nil {
-					return nil, err
-				}
-			}
 		}
 	}
 
