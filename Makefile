@@ -15,7 +15,7 @@ build-docker:
 
 build-cli: clean
 	-mkdir ./cli/build
-	cd ./cmd/migrate && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -a -o $(CLI_BUILD_OUTPUT) -ldflags='-X main.Version=$(VERSION) -extldflags "-static"' -tags '$(DATABASE) $(SOURCE)' .
+	cd ./cmd/migrate && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o $(CLI_BUILD_OUTPUT) -ldflags='-X main.Version=$(VERSION) -extldflags "-static"' -tags '$(DATABASE) $(SOURCE)' .
 
 clean:
 	-rm -r ./cli/build
@@ -103,4 +103,3 @@ endef
 
 SHELL = /bin/sh
 RAND = $(shell echo $$RANDOM)
-
