@@ -6,6 +6,7 @@ TEST_FLAGS ?=
 REPO_OWNER ?= $(shell cd .. && basename "$$(pwd)")
 COVERAGE_DIR ?= .coverage
 CLI_BUILD_OUTPUT ?= /go/bin/migratecli
+GOOS ?= linux
 
 build:
 	CGO_ENABLED=0 go build -ldflags='-X main.Version=$(VERSION)' -tags '$(DATABASE) $(SOURCE)' ./cmd/migrate
@@ -15,7 +16,7 @@ build-docker:
 
 build-cli: clean
 	-mkdir ./cli/build
-	cd ./cmd/migrate && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o $(CLI_BUILD_OUTPUT) -ldflags='-X main.Version=$(VERSION) -extldflags "-static"' -tags '$(DATABASE) $(SOURCE)' .
+	cd ./cmd/migrate && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=amd64 go build -a -o $(CLI_BUILD_OUTPUT) -ldflags='-X main.Version=$(VERSION) -extldflags "-static"' -tags '$(DATABASE) $(SOURCE)' .
 
 clean:
 	-rm -r ./cli/build
