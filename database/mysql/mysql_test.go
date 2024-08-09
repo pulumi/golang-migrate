@@ -33,6 +33,7 @@ var (
 	}
 	// Supported versions: https://www.mysql.com/support/supportedplatforms/database.html
 	specs = []dktesting.ContainerSpec{
+		{ImageName: "mysql:5.5", Options: opts},
 		{ImageName: "mysql:5.6", Options: opts},
 		{ImageName: "mysql:5.7", Options: opts},
 		{ImageName: "mysql:8", Options: opts},

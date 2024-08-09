@@ -6,7 +6,7 @@ require (
 	cloud.google.com/go/storage v1.10.0
 	github.com/ClickHouse/clickhouse-go v1.3.12
 	github.com/Microsoft/go-winio v0.4.14 // indirect
-	github.com/aws/aws-sdk-go v1.37.33
+	github.com/aws/aws-sdk-go v1.17.7
 	github.com/bitly/go-hostpool v0.0.0-20171023180738-a3a6125de932 // indirect
 	github.com/bmizerany/assert v0.0.0-20160611221934-b7ed37b82869 // indirect
 	github.com/cockroachdb/cockroach-go v0.0.0-20190925194419-606b3d062051
@@ -34,7 +34,6 @@ require (
 	github.com/mutecomm/go-sqlcipher/v4 v4.4.0
 	github.com/nakagami/firebirdsql v0.0.0-20190310045651-3c02a58cfed8
 	github.com/neo4j/neo4j-go-driver v1.8.1-0.20200803113522-b626aa943eba
-	github.com/pkg/errors v0.9.1
 	github.com/snowflakedb/gosnowflake v1.3.5
 	github.com/stretchr/testify v1.5.1
 	github.com/tidwall/pretty v0.0.0-20180105212114-65a9db5fad51 // indirect
@@ -44,7 +43,8 @@ require (
 	gitlab.com/nyarla/go-crypt v0.0.0-20160106005555-d9a5dc2b789b // indirect
 	go.mongodb.org/mongo-driver v1.1.0
 	golang.org/x/crypto v0.0.0-20200709230013-948cd5f35899 // indirect
-	golang.org/x/net v0.0.0-20201110031124-69a78807bb2b
+	golang.org/x/net v0.0.0-20200813134508-3edf25e44fcc
+	golang.org/x/sys v0.0.0-20200817155316-9781c653f443 // indirect
 	golang.org/x/time v0.0.0-20200630173020-3af7569d3a1e // indirect
 	golang.org/x/tools v0.0.0-20200818005847-188abfa75333
 	google.golang.org/api v0.30.0

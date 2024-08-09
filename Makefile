@@ -1,12 +1,10 @@
 SOURCE ?= file go_bindata github github_ee aws_s3 google_cloud_storage godoc_vfs gitlab
-DATABASE ?= mysql
+DATABASE ?= postgres mysql redshift cassandra spanner cockroachdb clickhouse mongodb sqlserver firebird neo4j
 DATABASE_TEST ?= $(DATABASE) sqlite sqlcipher
 VERSION ?= $(shell git describe --tags 2>/dev/null | cut -c 2-)
 TEST_FLAGS ?=
 REPO_OWNER ?= $(shell cd .. && basename "$$(pwd)")
 COVERAGE_DIR ?= .coverage
-CLI_BUILD_OUTPUT ?= /go/bin/migratecli
-GOOS ?= linux
 
 build:
 	CGO_ENABLED=0 go build -ldflags='-X main.Version=$(VERSION)' -tags '$(DATABASE) $(SOURCE)' ./cmd/migrate
@@ -16,7 +14,16 @@ build-docker:
 
 build-cli: clean
 	-mkdir ./cli/build
-	cd ./cmd/migrate && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=amd64 go build -a -o $(CLI_BUILD_OUTPUT) -ldflags='-X main.Version=$(VERSION) -extldflags "-static"' -tags '$(DATABASE) $(SOURCE)' .
+	cd ./cmd/migrate && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o ../../cli/build/migrate.linux-amd64 -ldflags='-X main.Version=$(VERSION) -extldflags "-static"' -tags '$(DATABASE) $(SOURCE)' .
+	cd ./cmd/migrate && CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -a -o ../../cli/build/migrate.linux-armv7 -ldflags='-X main.Version=$(VERSION) -extldflags "-static"' -tags '$(DATABASE) $(SOURCE)' .
+	cd ./cmd/migrate && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -o ../../cli/build/migrate.linux-arm64 -ldflags='-X main.Version=$(VERSION) -extldflags "-static"' -tags '$(DATABASE) $(SOURCE)' .
+	cd ./cmd/migrate && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -a -o ../../cli/build/migrate.darwin-amd64 -ldflags='-X main.Version=$(VERSION) -extldflags "-static"' -tags '$(DATABASE) $(SOURCE)' .
+	cd ./cmd/migrate && CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -a -o ../../cli/build/migrate.windows-386.exe -ldflags='-X main.Version=$(VERSION) -extldflags "-static"' -tags '$(DATABASE) $(SOURCE)' .
+	cd ./cmd/migrate && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -a -o ../../cli/build/migrate.windows-amd64.exe -ldflags='-X main.Version=$(VERSION) -extldflags "-static"' -tags '$(DATABASE) $(SOURCE)' .
+	cd ./cli/build && find . -name 'migrate*' | xargs -I{} tar czf {}.tar.gz {}
+	cd ./cli/build && shasum -a 256 * > sha256sum.txt
+	cat ./cli/build/sha256sum.txt
+
 
 clean:
 	-rm -r ./cli/build
@@ -29,7 +36,7 @@ test-short:
 test:
 	@-rm -r $(COVERAGE_DIR)
 	@mkdir $(COVERAGE_DIR)
-	make test-with-flags TEST_FLAGS='-v -race -covermode atomic -coverprofile $$(COVERAGE_DIR)/combined.txt -bench=. -benchmem -timeout 40m'
+	make test-with-flags TEST_FLAGS='-v -race -covermode atomic -coverprofile $$(COVERAGE_DIR)/combined.txt -bench=. -benchmem -timeout 20m'
 
 
 test-with-flags:
@@ -104,3 +111,4 @@ endef
 
 SHELL = /bin/sh
 RAND = $(shell echo $$RANDOM)
+
