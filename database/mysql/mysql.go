@@ -271,7 +271,7 @@ func (m *Mysql) Open(url string) (database.Driver, error) {
 	}
 
 	metadataLockRetriesParam := customParams["x-metadata-lock-retries"]
-	metadataLockRetries := uint64(60)
+	metadataLockRetries := uint64(0)
 	if metadataLockRetriesParam != "" {
 		metadataLockRetries, err = strconv.ParseUint(metadataLockRetriesParam, 10, 32)
 		if err != nil {
