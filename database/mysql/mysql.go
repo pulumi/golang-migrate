@@ -6,7 +6,6 @@
 // See this design doc for more on the problem we are trying to solve:
 //  https://docs.google.com/document/d/1TfctnknUy3YHTpt0LmzmWuUHK2Qp3_hGUR446hCZx74/edit
 
-
 package mysql
 
 import (
