@@ -3,12 +3,12 @@ package ql
 import (
 	"database/sql"
 	"fmt"
-	"github.com/hashicorp/go-multierror"
 	"io"
-	"io/ioutil"
+	nurl "net/url"
 	"strings"
 
-	nurl "net/url"
+	"github.com/hashicorp/go-multierror"
+	"go.uber.org/atomic"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database"
@@ -34,7 +34,7 @@ type Config struct {
 
 type Ql struct {
 	db       *sql.DB
-	isLocked bool
+	isLocked atomic.Bool
 
 	config *Config
 }
@@ -136,6 +136,7 @@ func (m *Ql) Drop() (err error) {
 			err = multierror.Append(err, errClose)
 		}
 	}()
+
 	tableNames := make([]string, 0)
 	for tables.Next() {
 		var tableName string
@@ -148,6 +149,10 @@ func (m *Ql) Drop() (err error) {
 			}
 		}
 	}
+	if err := tables.Err(); err != nil {
+		return &database.Error{OrigErr: err, Query: []byte(query)}
+	}
+
 	if len(tableNames) > 0 {
 		for _, t := range tableNames {
 			query := "DROP TABLE " + t
@@ -161,21 +166,19 @@ func (m *Ql) Drop() (err error) {
 	return nil
 }
 func (m *Ql) Lock() error {
-	if m.isLocked {
+	if !m.isLocked.CAS(false, true) {
 		return database.ErrLocked
 	}
-	m.isLocked = true
 	return nil
 }
 func (m *Ql) Unlock() error {
-	if !m.isLocked {
-		return nil
+	if !m.isLocked.CAS(true, false) {
+		return database.ErrNotLocked
 	}
-	m.isLocked = false
 	return nil
 }
 func (m *Ql) Run(migration io.Reader) error {
-	migr, err := ioutil.ReadAll(migration)
+	migr, err := io.ReadAll(migration)
 	if err != nil {
 		return err
 	}

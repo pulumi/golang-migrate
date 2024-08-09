@@ -1,16 +1,15 @@
 package spanner
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	nurl "net/url"
 	"regexp"
 	"strconv"
 	"strings"
-
-	"golang.org/x/net/context"
 
 	"cloud.google.com/go/spanner"
 	sdb "cloud.google.com/go/spanner/admin/database/apiv1"
@@ -19,9 +18,10 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database"
 
+	adminpb "cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
 	"github.com/hashicorp/go-multierror"
+	uatomic "go.uber.org/atomic"
 	"google.golang.org/api/iterator"
-	adminpb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 )
 
 func init() {
@@ -32,12 +32,19 @@ func init() {
 // DefaultMigrationsTable is used if no custom table is specified
 const DefaultMigrationsTable = "SchemaMigrations"
 
+const (
+	unlockedVal = 0
+	lockedVal   = 1
+)
+
 // Driver errors
 var (
-	ErrNilConfig      = fmt.Errorf("no config")
-	ErrNoDatabaseName = fmt.Errorf("no database name")
-	ErrNoSchema       = fmt.Errorf("no schema")
-	ErrDatabaseDirty  = fmt.Errorf("database is dirty")
+	ErrNilConfig      = errors.New("no config")
+	ErrNoDatabaseName = errors.New("no database name")
+	ErrNoSchema       = errors.New("no schema")
+	ErrDatabaseDirty  = errors.New("database is dirty")
+	ErrLockHeld       = errors.New("unable to obtain lock")
+	ErrLockNotHeld    = errors.New("unable to release already released lock")
 )
 
 // Config used for a Spanner instance
@@ -56,6 +63,8 @@ type Spanner struct {
 	db *DB
 
 	config *Config
+
+	lock *uatomic.Uint32
 }
 
 type DB struct {
@@ -87,6 +96,7 @@ func WithInstance(instance *DB, config *Config) (database.Driver, error) {
 	sx := &Spanner{
 		db:     instance,
 		config: config,
+		lock:   uatomic.NewUint32(unlockedVal),
 	}
 
 	if err := sx.ensureVersionTable(); err != nil {
@@ -143,17 +153,23 @@ func (s *Spanner) Close() error {
 // Lock implements database.Driver but doesn't do anything because Spanner only
 // enqueues the UpdateDatabaseDdlRequest.
 func (s *Spanner) Lock() error {
-	return nil
+	if swapped := s.lock.CAS(unlockedVal, lockedVal); swapped {
+		return nil
+	}
+	return ErrLockHeld
 }
 
 // Unlock implements database.Driver but no action required, see Lock.
 func (s *Spanner) Unlock() error {
-	return nil
+	if swapped := s.lock.CAS(lockedVal, unlockedVal); swapped {
+		return nil
+	}
+	return ErrLockNotHeld
 }
 
 // Run implements database.Driver
 func (s *Spanner) Run(migration io.Reader) error {
-	migr, err := ioutil.ReadAll(migration)
+	migr, err := io.ReadAll(migration)
 	if err != nil {
 		return err
 	}

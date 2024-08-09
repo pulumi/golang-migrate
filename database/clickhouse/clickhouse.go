@@ -4,11 +4,12 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"go.uber.org/atomic"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database"
@@ -20,6 +21,7 @@ var (
 	multiStmtDelimiter = []byte(";")
 
 	DefaultMigrationsTable       = "schema_migrations"
+	DefaultMigrationsTableEngine = "TinyLog"
 	DefaultMultiStatementMaxSize = 10 * 1 << 20 // 10 MB
 
 	ErrNilConfig = fmt.Errorf("no config")
@@ -27,7 +29,9 @@ var (
 
 type Config struct {
 	DatabaseName          string
+	ClusterName           string
 	MigrationsTable       string
+	MigrationsTableEngine string
 	MultiStatementEnabled bool
 	MultiStatementMaxSize int
 }
@@ -58,8 +62,9 @@ func WithInstance(conn *sql.DB, config *Config) (database.Driver, error) {
 }
 
 type ClickHouse struct {
-	conn   *sql.DB
-	config *Config
+	conn     *sql.DB
+	config   *Config
+	isLocked atomic.Bool
 }
 
 func (ch *ClickHouse) Open(dsn string) (database.Driver, error) {
@@ -82,11 +87,18 @@ func (ch *ClickHouse) Open(dsn string) (database.Driver, error) {
 		}
 	}
 
+	migrationsTableEngine := DefaultMigrationsTableEngine
+	if s := purl.Query().Get("x-migrations-table-engine"); len(s) > 0 {
+		migrationsTableEngine = s
+	}
+
 	ch = &ClickHouse{
 		conn: conn,
 		config: &Config{
 			MigrationsTable:       purl.Query().Get("x-migrations-table"),
+			MigrationsTableEngine: migrationsTableEngine,
 			DatabaseName:          purl.Query().Get("database"),
+			ClusterName:           purl.Query().Get("x-cluster-name"),
 			MultiStatementEnabled: purl.Query().Get("x-multi-statement") == "true",
 			MultiStatementMaxSize: multiStatementMaxSize,
 		},
@@ -114,6 +126,10 @@ func (ch *ClickHouse) init() error {
 		ch.config.MultiStatementMaxSize = DefaultMultiStatementMaxSize
 	}
 
+	if len(ch.config.MigrationsTableEngine) == 0 {
+		ch.config.MigrationsTableEngine = DefaultMigrationsTableEngine
+	}
+
 	return ch.ensureVersionTable()
 }
 
@@ -136,7 +152,7 @@ func (ch *ClickHouse) Run(r io.Reader) error {
 		return err
 	}
 
-	migration, err := ioutil.ReadAll(r)
+	migration, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
@@ -204,7 +220,7 @@ func (ch *ClickHouse) ensureVersionTable() (err error) {
 
 	var (
 		table string
-		query = "SHOW TABLES FROM " + ch.config.DatabaseName + " LIKE '" + ch.config.MigrationsTable + "'"
+		query = "SHOW TABLES FROM " + quoteIdentifier(ch.config.DatabaseName) + " LIKE '" + ch.config.MigrationsTable + "'"
 	)
 	// check if migration table exists
 	if err := ch.conn.QueryRow(query).Scan(&table); err != nil {
@@ -214,14 +230,28 @@ func (ch *ClickHouse) ensureVersionTable() (err error) {
 	} else {
 		return nil
 	}
+
 	// if not, create the empty migration table
-	query = `
-		CREATE TABLE ` + ch.config.MigrationsTable + ` (
-			version    Int64, 
-			dirty      UInt8,
-			sequence   UInt64
-		) Engine=TinyLog
-	`
+	if len(ch.config.ClusterName) > 0 {
+		query = fmt.Sprintf(`
+			CREATE TABLE %s ON CLUSTER %s (
+				version    Int64,
+				dirty      UInt8,
+				sequence   UInt64
+			) Engine=%s`, ch.config.MigrationsTable, ch.config.ClusterName, ch.config.MigrationsTableEngine)
+	} else {
+		query = fmt.Sprintf(`
+			CREATE TABLE %s (
+				version    Int64,
+				dirty      UInt8,
+				sequence   UInt64
+			) Engine=%s`, ch.config.MigrationsTable, ch.config.MigrationsTableEngine)
+	}
+
+	if strings.HasSuffix(ch.config.MigrationsTableEngine, "Tree") {
+		query = fmt.Sprintf(`%s ORDER BY sequence`, query)
+	}
+
 	if _, err := ch.conn.Exec(query); err != nil {
 		return &database.Error{OrigErr: err, Query: []byte(query)}
 	}
@@ -229,7 +259,7 @@ func (ch *ClickHouse) ensureVersionTable() (err error) {
 }
 
 func (ch *ClickHouse) Drop() (err error) {
-	query := "SHOW TABLES FROM " + ch.config.DatabaseName
+	query := "SHOW TABLES FROM " + quoteIdentifier(ch.config.DatabaseName)
 	tables, err := ch.conn.Query(query)
 
 	if err != nil {
@@ -240,21 +270,47 @@ func (ch *ClickHouse) Drop() (err error) {
 			err = multierror.Append(err, errClose)
 		}
 	}()
+
 	for tables.Next() {
 		var table string
 		if err := tables.Scan(&table); err != nil {
 			return err
 		}
 
-		query = "DROP TABLE IF EXISTS " + ch.config.DatabaseName + "." + table
+		query = "DROP TABLE IF EXISTS " + quoteIdentifier(ch.config.DatabaseName) + "." + quoteIdentifier(table)
 
 		if _, err := ch.conn.Exec(query); err != nil {
 			return &database.Error{OrigErr: err, Query: []byte(query)}
 		}
 	}
+	if err := tables.Err(); err != nil {
+		return &database.Error{OrigErr: err, Query: []byte(query)}
+	}
+
 	return nil
 }
 
-func (ch *ClickHouse) Lock() error   { return nil }
-func (ch *ClickHouse) Unlock() error { return nil }
-func (ch *ClickHouse) Close() error  { return ch.conn.Close() }
+func (ch *ClickHouse) Lock() error {
+	if !ch.isLocked.CAS(false, true) {
+		return database.ErrLocked
+	}
+
+	return nil
+}
+func (ch *ClickHouse) Unlock() error {
+	if !ch.isLocked.CAS(true, false) {
+		return database.ErrNotLocked
+	}
+
+	return nil
+}
+func (ch *ClickHouse) Close() error { return ch.conn.Close() }
+
+// Copied from lib/pq implementation: https://github.com/lib/pq/blob/v1.9.0/conn.go#L1611
+func quoteIdentifier(name string) string {
+	end := strings.IndexRune(name, 0)
+	if end > -1 {
+		name = name[:end]
+	}
+	return `"` + strings.Replace(name, `"`, `""`, -1) + `"`
+}

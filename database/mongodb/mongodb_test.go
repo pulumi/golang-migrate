@@ -74,6 +74,22 @@ func isReady(ctx context.Context, c dktest.ContainerInfo) bool {
 }
 
 func Test(t *testing.T) {
+	t.Run("test", test)
+	t.Run("testMigrate", testMigrate)
+	t.Run("testWithAuth", testWithAuth)
+	t.Run("testLockWorks", testLockWorks)
+
+	t.Cleanup(func() {
+		for _, spec := range specs {
+			t.Log("Cleaning up ", spec.ImageName)
+			if err := spec.Cleanup(); err != nil {
+				t.Error("Error removing ", spec.ImageName, "error:", err)
+			}
+		}
+	})
+}
+
+func test(t *testing.T) {
 	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
 		ip, port, err := c.FirstPort()
 		if err != nil {
@@ -92,14 +108,14 @@ func Test(t *testing.T) {
 			}
 		}()
 		dt.TestNilVersion(t, d)
-		//TestLockAndUnlock(t, d) driver doesn't support lock on database level
+		dt.TestLockAndUnlock(t, d)
 		dt.TestRun(t, d, bytes.NewReader([]byte(`[{"insert":"hello","documents":[{"wild":"world"}]}]`)))
 		dt.TestSetVersion(t, d)
 		dt.TestDrop(t, d)
 	})
 }
 
-func TestMigrate(t *testing.T) {
+func testMigrate(t *testing.T) {
 	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
 		ip, port, err := c.FirstPort()
 		if err != nil {
@@ -125,7 +141,7 @@ func TestMigrate(t *testing.T) {
 	})
 }
 
-func TestWithAuth(t *testing.T) {
+func testWithAuth(t *testing.T) {
 	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
 		ip, port, err := c.FirstPort()
 		if err != nil {
@@ -180,11 +196,76 @@ func TestWithAuth(t *testing.T) {
 	})
 }
 
+func testLockWorks(t *testing.T) {
+	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
+		ip, port, err := c.FirstPort()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		addr := mongoConnectionString(ip, port)
+		p := &Mongo{}
+		d, err := p.Open(addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := d.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+
+		dt.TestRun(t, d, bytes.NewReader([]byte(`[{"insert":"hello","documents":[{"wild":"world"}]}]`)))
+
+		mc := d.(*Mongo)
+
+		err = mc.Lock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = mc.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = mc.Lock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = mc.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// enable locking,
+		//try to hit a lock conflict
+		mc.config.Locking.Enabled = true
+		mc.config.Locking.Timeout = 1
+		err = mc.Lock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = mc.Lock()
+		if err == nil {
+			t.Fatal("should have failed, mongo should be locked already")
+		}
+	})
+}
+
 func TestTransaction(t *testing.T) {
 	transactionSpecs := []dktesting.ContainerSpec{
 		{ImageName: "mongo:4", Options: dktest.Options{PortRequired: true, ReadyFunc: isReady,
 			Cmd: []string{"mongod", "--bind_ip_all", "--replSet", "rs0"}}},
 	}
+	t.Cleanup(func() {
+		for _, spec := range transactionSpecs {
+			t.Log("Cleaning up ", spec.ImageName)
+			if err := spec.Cleanup(); err != nil {
+				t.Error("Error removing ", spec.ImageName, "error:", err)
+			}
+		}
+	})
+
 	dktesting.ParallelTest(t, transactionSpecs, func(t *testing.T, c dktest.ContainerInfo) {
 		ip, port, err := c.FirstPort()
 		if err != nil {

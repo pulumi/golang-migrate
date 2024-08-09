@@ -4,10 +4,11 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"io/ioutil"
 	nurl "net/url"
 	"strconv"
 	"strings"
+
+	"go.uber.org/atomic"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database"
@@ -34,7 +35,7 @@ type Config struct {
 
 type Sqlite struct {
 	db       *sql.DB
-	isLocked bool
+	isLocked atomic.Bool
 
 	config *Config
 }
@@ -143,6 +144,7 @@ func (m *Sqlite) Drop() (err error) {
 			err = multierror.Append(err, errClose)
 		}
 	}()
+
 	tableNames := make([]string, 0)
 	for tables.Next() {
 		var tableName string
@@ -153,6 +155,10 @@ func (m *Sqlite) Drop() (err error) {
 			tableNames = append(tableNames, tableName)
 		}
 	}
+	if err := tables.Err(); err != nil {
+		return &database.Error{OrigErr: err, Query: []byte(query)}
+	}
+
 	if len(tableNames) > 0 {
 		for _, t := range tableNames {
 			query := "DROP TABLE " + t
@@ -172,23 +178,21 @@ func (m *Sqlite) Drop() (err error) {
 }
 
 func (m *Sqlite) Lock() error {
-	if m.isLocked {
+	if !m.isLocked.CAS(false, true) {
 		return database.ErrLocked
 	}
-	m.isLocked = true
 	return nil
 }
 
 func (m *Sqlite) Unlock() error {
-	if !m.isLocked {
-		return nil
+	if !m.isLocked.CAS(true, false) {
+		return database.ErrNotLocked
 	}
-	m.isLocked = false
 	return nil
 }
 
 func (m *Sqlite) Run(migration io.Reader) error {
-	migr, err := ioutil.ReadAll(migration)
+	migr, err := io.ReadAll(migration)
 	if err != nil {
 		return err
 	}

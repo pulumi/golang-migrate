@@ -4,15 +4,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	nurl "net/url"
 	"os"
 	"strconv"
 	"strings"
-)
 
-import (
 	"github.com/golang-migrate/migrate/v4/source"
 	"github.com/xanzy/go-gitlab"
 )
@@ -20,6 +17,8 @@ import (
 func init() {
 	source.Register("gitlab", &Gitlab{})
 }
+
+const DefaultMaxItemsPerPage = 100
 
 var (
 	ErrNoUserInfo       = fmt.Errorf("no username:token provided")
@@ -88,6 +87,9 @@ func (g *Gitlab) Open(url string) (source.Driver, error) {
 	gn.listOptions = &gitlab.ListTreeOptions{
 		Path: &gn.path,
 		Ref:  &u.Fragment,
+		ListOptions: gitlab.ListOptions{
+			PerPage: DefaultMaxItemsPerPage,
+		},
 	}
 
 	gn.getOptions = &gitlab.GetFileOptions{
@@ -113,13 +115,22 @@ func WithInstance(client *gitlab.Client, config *Config) (source.Driver, error) 
 }
 
 func (g *Gitlab) readDirectory() error {
-	nodes, response, err := g.client.Repositories.ListTree(g.projectID, g.listOptions)
-	if err != nil {
-		return err
-	}
+	var nodes []*gitlab.TreeNode
+	for {
+		n, response, err := g.client.Repositories.ListTree(g.projectID, g.listOptions)
+		if err != nil {
+			return err
+		}
 
-	if response.StatusCode != http.StatusOK {
-		return ErrInvalidResponse
+		if response.StatusCode != http.StatusOK {
+			return ErrInvalidResponse
+		}
+
+		nodes = append(nodes, n...)
+		if response.CurrentPage >= response.TotalPages {
+			break
+		}
+		g.listOptions.ListOptions.Page = response.NextPage
 	}
 
 	for i := range nodes {
@@ -197,7 +208,7 @@ func (g *Gitlab) ReadUp(version uint) (r io.ReadCloser, identifier string, err e
 			return nil, "", err
 		}
 
-		return ioutil.NopCloser(strings.NewReader(string(content))), m.Identifier, nil
+		return io.NopCloser(strings.NewReader(string(content))), m.Identifier, nil
 	}
 
 	return nil, "", &os.PathError{Op: fmt.Sprintf("read version %v", version), Path: g.path, Err: os.ErrNotExist}
@@ -219,7 +230,7 @@ func (g *Gitlab) ReadDown(version uint) (r io.ReadCloser, identifier string, err
 			return nil, "", err
 		}
 
-		return ioutil.NopCloser(strings.NewReader(string(content))), m.Identifier, nil
+		return io.NopCloser(strings.NewReader(string(content))), m.Identifier, nil
 	}
 
 	return nil, "", &os.PathError{Op: fmt.Sprintf("read version %v", version), Path: g.path, Err: os.ErrNotExist}

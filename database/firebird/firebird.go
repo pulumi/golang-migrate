@@ -1,3 +1,4 @@
+//go:build go1.9
 // +build go1.9
 
 package firebird
@@ -6,13 +7,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
+	nurl "net/url"
+
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database"
 	"github.com/hashicorp/go-multierror"
 	_ "github.com/nakagami/firebirdsql"
-	"io"
-	"io/ioutil"
-	nurl "net/url"
+	"go.uber.org/atomic"
 )
 
 func init() {
@@ -36,7 +38,7 @@ type Firebird struct {
 	// Locking and unlocking need to use the same connection
 	conn     *sql.Conn
 	db       *sql.DB
-	isLocked bool
+	isLocked atomic.Bool
 
 	// Open and WithInstance need to guarantee that config is never nil
 	config *Config
@@ -106,20 +108,21 @@ func (f *Firebird) Close() error {
 }
 
 func (f *Firebird) Lock() error {
-	if f.isLocked {
+	if !f.isLocked.CAS(false, true) {
 		return database.ErrLocked
 	}
-	f.isLocked = true
 	return nil
 }
 
 func (f *Firebird) Unlock() error {
-	f.isLocked = false
+	if !f.isLocked.CAS(true, false) {
+		return database.ErrNotLocked
+	}
 	return nil
 }
 
 func (f *Firebird) Run(migration io.Reader) error {
-	migr, err := ioutil.ReadAll(migration)
+	migr, err := io.ReadAll(migration)
 	if err != nil {
 		return err
 	}
@@ -192,6 +195,9 @@ func (f *Firebird) Drop() (err error) {
 		if len(tableName) > 0 {
 			tableNames = append(tableNames, tableName)
 		}
+	}
+	if err := tables.Err(); err != nil {
+		return &database.Error{OrigErr: err, Query: []byte(query)}
 	}
 
 	// delete one by one ...

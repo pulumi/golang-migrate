@@ -1,11 +1,16 @@
-# Cassandra
+# Cassandra / ScyllaDB
 
-* Drop command will not work on Cassandra 2.X because it rely on
+* `Drop()` method will not work on Cassandra 2.X because it rely on
 system_schema table which comes with 3.X
-* Other commands should work properly but are **not tested**
+* Other methods should work properly but are **not tested**
 * The Cassandra driver (gocql) does not natively support executing multiple statements in a single query. To allow for multiple statements in a single migration, you can use the `x-multi-statement` param. There are two important caveats:
   * This mode splits the migration text into separately-executed statements by a semi-colon `;`. Thus `x-multi-statement` cannot be used when a statement in the migration contains a string with a semi-colon.
   * The queries are not executed in any sort of transaction/batch, meaning you are responsible for fixing partial migrations.
+
+**ScyllaDB**
+
+* No additional configuration is required since it is a drop-in replacement for Cassandra.
+* The `Drop()` method` works for ScyllaDB 5.1
 
 
 ## Usage
@@ -20,12 +25,14 @@ system_schema table which comes with 3.X
 | `consistency` | ALL | Migration consistency
 | `protocol` |  | Cassandra protocol version (3 or 4)
 | `timeout` | 1 minute | Migration timeout
+| `connect-timeout` | 600ms | Initial connection timeout to the cluster |
 | `username` | nil | Username to use when authenticating. |
 | `password` | nil | Password to use when authenticating. |
 | `sslcert` | | Cert file location. The file must contain PEM encoded data. |
 | `sslkey` | | Key file location. The file must contain PEM encoded data. |
 | `sslrootcert` | | The location of the root certificate file. The file must contain PEM encoded data. |
 | `sslmode` | | Whether or not to use SSL (disable\|require\|verify-ca\|verify-full) |
+| `disable-host-lookup`| false | Disable initial host lookup. |
 
 `timeout` is parsed using [time.ParseDuration(s string)](https://golang.org/pkg/time/#ParseDuration)
 

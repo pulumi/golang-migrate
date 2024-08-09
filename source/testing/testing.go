@@ -15,8 +15,9 @@ import (
 // It assumes that the driver tests has access to the following migrations:
 //
 // u = up migration, d = down migration, n = version
-//  |  1  |  -  |  3  |  4  |  5  |  -  |  7  |
-//  | u d |  -  | u   | u d |   d |  -  | u d |
+//
+//	|  1  |  -  |  3  |  4  |  5  |  -  |  7  |
+//	| u d |  -  | u   | u d |   d |  -  | u d |
 //
 // See source/stub/stub_test.go or source/file/file_test.go for an example.
 func Test(t *testing.T, d source.Driver) {
@@ -129,6 +130,11 @@ func TestReadUp(t *testing.T, d source.Driver) {
 				t.Errorf("expected up to be nil, got %v, in %v", up, i)
 			}
 		}
+		if up != nil {
+			if err := up.Close(); err != nil {
+				t.Error(err)
+			}
+		}
 	}
 }
 
@@ -164,6 +170,11 @@ func TestReadDown(t *testing.T, d source.Driver) {
 				t.Errorf("expected down not to be nil, in %v", i)
 			} else if !v.expectDown && down != nil {
 				t.Errorf("expected down to be nil, got %v, in %v", down, i)
+			}
+		}
+		if down != nil {
+			if err := down.Close(); err != nil {
+				t.Error(err)
 			}
 		}
 	}

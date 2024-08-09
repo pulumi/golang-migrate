@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"io/ioutil"
 	nurl "net/url"
 	"strconv"
 	"strings"
+
+	"go.uber.org/atomic"
 
 	"github.com/golang-migrate/migrate/v4/database"
 	"github.com/hashicorp/go-multierror"
@@ -37,7 +38,7 @@ type Config struct {
 }
 
 type Snowflake struct {
-	isLocked bool
+	isLocked atomic.Bool
 	conn     *sql.Conn
 	db       *sql.DB
 
@@ -158,20 +159,21 @@ func (p *Snowflake) Close() error {
 }
 
 func (p *Snowflake) Lock() error {
-	if p.isLocked {
+	if !p.isLocked.CAS(false, true) {
 		return database.ErrLocked
 	}
-	p.isLocked = true
 	return nil
 }
 
 func (p *Snowflake) Unlock() error {
-	p.isLocked = false
+	if !p.isLocked.CAS(true, false) {
+		return database.ErrNotLocked
+	}
 	return nil
 }
 
 func (p *Snowflake) Run(migration io.Reader) error {
-	migr, err := ioutil.ReadAll(migration)
+	migr, err := io.ReadAll(migration)
 	if err != nil {
 		return err
 	}
@@ -317,6 +319,9 @@ func (p *Snowflake) Drop() (err error) {
 		if len(tableName) > 0 {
 			tableNames = append(tableNames, tableName)
 		}
+	}
+	if err := tables.Err(); err != nil {
+		return &database.Error{OrigErr: err, Query: []byte(query)}
 	}
 
 	if len(tableNames) > 0 {

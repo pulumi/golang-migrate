@@ -2,26 +2,28 @@ package mysql
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/x509"
 	"database/sql"
 	sqldriver "database/sql/driver"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"log"
+	"math/big"
+	"math/rand"
+	"net/url"
+	"os"
 	"strconv"
 	"testing"
-)
 
-import (
 	"github.com/dhui/dktest"
 	"github.com/go-sql-driver/mysql"
-	"github.com/stretchr/testify/assert"
-)
-
-import (
 	"github.com/golang-migrate/migrate/v4"
 	dt "github.com/golang-migrate/migrate/v4/database/testing"
 	"github.com/golang-migrate/migrate/v4/dktesting"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/stretchr/testify/assert"
 )
 
 const defaultPort = 3306
@@ -31,12 +33,23 @@ var (
 		Env:          map[string]string{"MYSQL_ROOT_PASSWORD": "root", "MYSQL_DATABASE": "public"},
 		PortRequired: true, ReadyFunc: isReady,
 	}
+	optsAnsiQuotes = dktest.Options{
+		Env:          map[string]string{"MYSQL_ROOT_PASSWORD": "root", "MYSQL_DATABASE": "public"},
+		PortRequired: true, ReadyFunc: isReady,
+		Cmd: []string{"--sql-mode=ANSI_QUOTES"},
+	}
 	// Supported versions: https://www.mysql.com/support/supportedplatforms/database.html
 	specs = []dktesting.ContainerSpec{
 		{ImageName: "mysql:5.5", Options: opts},
 		{ImageName: "mysql:5.6", Options: opts},
 		{ImageName: "mysql:5.7", Options: opts},
 		{ImageName: "mysql:8", Options: opts},
+	}
+	specsAnsiQuotes = []dktesting.ContainerSpec{
+		{ImageName: "mysql:5.5", Options: optsAnsiQuotes},
+		{ImageName: "mysql:5.6", Options: optsAnsiQuotes},
+		{ImageName: "mysql:5.7", Options: optsAnsiQuotes},
+		{ImageName: "mysql:8", Options: optsAnsiQuotes},
 	}
 )
 
@@ -69,7 +82,7 @@ func isReady(ctx context.Context, c dktest.ContainerInfo) bool {
 }
 
 func Test(t *testing.T) {
-	// mysql.SetLogger(mysql.Logger(log.New(ioutil.Discard, "", log.Ltime)))
+	// mysql.SetLogger(mysql.Logger(log.New(io.Discard, "", log.Ltime)))
 
 	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
 		ip, port, err := c.Port(defaultPort)
@@ -102,9 +115,47 @@ func Test(t *testing.T) {
 }
 
 func TestMigrate(t *testing.T) {
-	// mysql.SetLogger(mysql.Logger(log.New(ioutil.Discard, "", log.Ltime)))
+	// mysql.SetLogger(mysql.Logger(log.New(io.Discard, "", log.Ltime)))
 
 	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
+		ip, port, err := c.Port(defaultPort)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		addr := fmt.Sprintf("mysql://root:root@tcp(%v:%v)/public", ip, port)
+		p := &Mysql{}
+		d, err := p.Open(addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := d.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+
+		m, err := migrate.NewWithDatabaseInstance("file://./examples/migrations", "public", d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dt.TestMigrate(t, m)
+
+		// check ensureVersionTable
+		if err := d.(*Mysql).ensureVersionTable(); err != nil {
+			t.Fatal(err)
+		}
+		// check again
+		if err := d.(*Mysql).ensureVersionTable(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestMigrateAnsiQuotes(t *testing.T) {
+	// mysql.SetLogger(mysql.Logger(log.New(io.Discard, "", log.Ltime)))
+
+	dktesting.ParallelTest(t, specsAnsiQuotes, func(t *testing.T, c dktest.ContainerInfo) {
 		ip, port, err := c.Port(defaultPort)
 		if err != nil {
 			t.Fatal(err)
@@ -284,7 +335,42 @@ func TestExtractCustomQueryParams(t *testing.T) {
 	}
 }
 
+func createTmpCert(t *testing.T) string {
+	tmpCertFile, err := os.CreateTemp("", "migrate_test_cert")
+	if err != nil {
+		t.Fatal("Failed to create temp cert file:", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Remove(tmpCertFile.Name()); err != nil {
+			t.Log("Failed to cleanup temp cert file:", err)
+		}
+	})
+
+	r := rand.New(rand.NewSource(0))
+	pub, priv, err := ed25519.GenerateKey(r)
+	if err != nil {
+		t.Fatal("Failed to generate ed25519 key for temp cert file:", err)
+	}
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(0),
+	}
+	derBytes, err := x509.CreateCertificate(r, &tmpl, &tmpl, pub, priv)
+	if err != nil {
+		t.Fatal("Failed to generate temp cert file:", err)
+	}
+	if err := pem.Encode(tmpCertFile, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes}); err != nil {
+		t.Fatal("Failed to encode ")
+	}
+	if err := tmpCertFile.Close(); err != nil {
+		t.Fatal("Failed to close temp cert file:", err)
+	}
+	return tmpCertFile.Name()
+}
+
 func TestURLToMySQLConfig(t *testing.T) {
+	tmpCertFilename := createTmpCert(t)
+	tmpCertFilenameEscaped := url.PathEscape(tmpCertFilename)
+
 	testcases := []struct {
 		name        string
 		urlStr      string
@@ -305,7 +391,7 @@ func TestURLToMySQLConfig(t *testing.T) {
 		// Not supported yet: https://github.com/go-sql-driver/mysql/issues/591
 		// {name: "user/password - user with encoded :",
 		// 	urlStr:      "mysql://username%3A:password@tcp(127.0.0.1:3306)/myDB?multiStatements=true",
-		// 	expectedDSN: "username::pasword@tcp(127.0.0.1:3306)/myDB?multiStatements=true"},
+		// 	expectedDSN: "username::password@tcp(127.0.0.1:3306)/myDB?multiStatements=true"},
 		{name: "user/password - user with encoded @",
 			urlStr:      "mysql://username%40:password@tcp(127.0.0.1:3306)/myDB?multiStatements=true",
 			expectedDSN: "username@:password@tcp(127.0.0.1:3306)/myDB?multiStatements=true"},
@@ -315,6 +401,9 @@ func TestURLToMySQLConfig(t *testing.T) {
 		{name: "user/password - password with encoded @",
 			urlStr:      "mysql://username:password%40@tcp(127.0.0.1:3306)/myDB?multiStatements=true",
 			expectedDSN: "username:password@@tcp(127.0.0.1:3306)/myDB?multiStatements=true"},
+		{name: "custom tls",
+			urlStr:      "mysql://username:password@tcp(127.0.0.1:3306)/myDB?multiStatements=true&tls=custom&x-tls-ca=" + tmpCertFilenameEscaped,
+			expectedDSN: "username:password@tcp(127.0.0.1:3306)/myDB?multiStatements=true&tls=custom&x-tls-ca=" + tmpCertFilenameEscaped},
 	}
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
