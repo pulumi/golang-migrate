@@ -2,8 +2,9 @@ package stub
 
 import (
 	"io"
-	"io/ioutil"
 	"reflect"
+
+	"go.uber.org/atomic"
 
 	"github.com/golang-migrate/migrate/v4/database"
 )
@@ -19,7 +20,7 @@ type Stub struct {
 	MigrationSequence []string
 	LastRunMigration  []byte // todo: make []string
 	IsDirty           bool
-	IsLocked          bool
+	isLocked          atomic.Bool
 
 	Config *Config
 }
@@ -49,20 +50,21 @@ func (s *Stub) Close() error {
 }
 
 func (s *Stub) Lock() error {
-	if s.IsLocked {
+	if !s.isLocked.CAS(false, true) {
 		return database.ErrLocked
 	}
-	s.IsLocked = true
 	return nil
 }
 
 func (s *Stub) Unlock() error {
-	s.IsLocked = false
+	if !s.isLocked.CAS(true, false) {
+		return database.ErrNotLocked
+	}
 	return nil
 }
 
 func (s *Stub) Run(migration io.Reader) error {
-	m, err := ioutil.ReadAll(migration)
+	m, err := io.ReadAll(migration)
 	if err != nil {
 		return err
 	}

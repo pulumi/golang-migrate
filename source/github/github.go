@@ -4,16 +4,16 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
+	"net/http"
 	nurl "net/url"
 	"os"
 	"path"
 	"strings"
-)
 
-import (
+	"golang.org/x/oauth2"
+
 	"github.com/golang-migrate/migrate/v4/source"
-	"github.com/google/go-github/github"
+	"github.com/google/go-github/v39/github"
 )
 
 func init() {
@@ -48,22 +48,22 @@ func (g *Github) Open(url string) (source.Driver, error) {
 		return nil, err
 	}
 
-	if u.User == nil {
-		return nil, ErrNoUserInfo
-	}
+	// client defaults to http.DefaultClient
+	var client *http.Client
+	if u.User != nil {
+		password, ok := u.User.Password()
+		if !ok {
+			return nil, ErrNoUserInfo
+		}
+		ts := oauth2.StaticTokenSource(
+			&oauth2.Token{AccessToken: password},
+		)
+		client = oauth2.NewClient(context.Background(), ts)
 
-	password, ok := u.User.Password()
-	if !ok {
-		return nil, ErrNoUserInfo
-	}
-
-	tr := &github.BasicAuthTransport{
-		Username: u.User.Username(),
-		Password: password,
 	}
 
 	gn := &Github{
-		client:     github.NewClient(tr.Client()),
+		client:     github.NewClient(client),
 		migrations: source.NewMigrations(),
 		options:    &github.RepositoryContentGetOptions{Ref: u.Fragment},
 	}
@@ -144,7 +144,7 @@ func (g *Github) Close() error {
 	return nil
 }
 
-func (g *Github) First() (version uint, er error) {
+func (g *Github) First() (version uint, err error) {
 	g.ensureFields()
 
 	if v, ok := g.migrations.First(); !ok {
@@ -178,7 +178,7 @@ func (g *Github) ReadUp(version uint) (r io.ReadCloser, identifier string, err e
 	g.ensureFields()
 
 	if m, ok := g.migrations.Up(version); ok {
-		file, _, _, err := g.client.Repositories.GetContents(
+		r, _, err := g.client.Repositories.DownloadContents(
 			context.Background(),
 			g.config.Owner,
 			g.config.Repo,
@@ -189,13 +189,7 @@ func (g *Github) ReadUp(version uint) (r io.ReadCloser, identifier string, err e
 		if err != nil {
 			return nil, "", err
 		}
-		if file != nil {
-			r, err := file.GetContent()
-			if err != nil {
-				return nil, "", err
-			}
-			return ioutil.NopCloser(strings.NewReader(r)), m.Identifier, nil
-		}
+		return r, m.Identifier, nil
 	}
 	return nil, "", &os.PathError{Op: fmt.Sprintf("read version %v", version), Path: g.config.Path, Err: os.ErrNotExist}
 }
@@ -204,7 +198,7 @@ func (g *Github) ReadDown(version uint) (r io.ReadCloser, identifier string, err
 	g.ensureFields()
 
 	if m, ok := g.migrations.Down(version); ok {
-		file, _, _, err := g.client.Repositories.GetContents(
+		r, _, err := g.client.Repositories.DownloadContents(
 			context.Background(),
 			g.config.Owner,
 			g.config.Repo,
@@ -215,13 +209,7 @@ func (g *Github) ReadDown(version uint) (r io.ReadCloser, identifier string, err
 		if err != nil {
 			return nil, "", err
 		}
-		if file != nil {
-			r, err := file.GetContent()
-			if err != nil {
-				return nil, "", err
-			}
-			return ioutil.NopCloser(strings.NewReader(r)), m.Identifier, nil
-		}
+		return r, m.Identifier, nil
 	}
 	return nil, "", &os.PathError{Op: fmt.Sprintf("read version %v", version), Path: g.config.Path, Err: os.ErrNotExist}
 }

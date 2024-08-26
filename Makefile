@@ -1,22 +1,21 @@
-SOURCE ?= file go_bindata github github_ee aws_s3 google_cloud_storage godoc_vfs gitlab
-DATABASE ?= mysql
-DATABASE_TEST ?= $(DATABASE) sqlite sqlcipher
+SOURCE ?= file go_bindata github github_ee bitbucket aws_s3 google_cloud_storage godoc_vfs gitlab
+DATABASE ?= postgres mysql redshift cassandra spanner cockroachdb yugabytedb clickhouse mongodb sqlserver firebird neo4j pgx pgx5 rqlite
+DATABASE_TEST ?= $(DATABASE) sqlite sqlite3 sqlcipher
 VERSION ?= $(shell git describe --tags 2>/dev/null | cut -c 2-)
 TEST_FLAGS ?=
 REPO_OWNER ?= $(shell cd .. && basename "$$(pwd)")
 COVERAGE_DIR ?= .coverage
 CLI_BUILD_OUTPUT ?= /go/bin/migratecli
-GOOS ?= linux
 
 build:
 	CGO_ENABLED=0 go build -ldflags='-X main.Version=$(VERSION)' -tags '$(DATABASE) $(SOURCE)' ./cmd/migrate
 
 build-docker:
-	CGO_ENABLED=0 go build -a -o build/migrate.linux-386 -ldflags="-s -w -X main.Version=${VERSION}" -tags "$(DATABASE) $(SOURCE)" ./cmd/migrate
+	CGO_ENABLED=0 go build -a -o build/migrate -ldflags="-s -w -X main.Version=${VERSION}" -tags "$(DATABASE) $(SOURCE)" ./cmd/migrate
 
 build-cli: clean
 	-mkdir ./cli/build
-	cd ./cmd/migrate && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=amd64 go build -a -o $(CLI_BUILD_OUTPUT) -ldflags='-X main.Version=$(VERSION) -extldflags "-static"' -tags '$(DATABASE) $(SOURCE)' .
+	cd ./cmd/migrate && CGO_ENABLED=0 go build -a -o $(CLI_BUILD_OUTPUT) -ldflags='-X main.Version=$(VERSION) -extldflags "-static"' -tags '$(DATABASE) $(SOURCE)' .
 
 clean:
 	-rm -r ./cli/build
@@ -29,7 +28,7 @@ test-short:
 test:
 	@-rm -r $(COVERAGE_DIR)
 	@mkdir $(COVERAGE_DIR)
-	make test-with-flags TEST_FLAGS='-v -race -covermode atomic -coverprofile $$(COVERAGE_DIR)/combined.txt -bench=. -benchmem -timeout 40m'
+	make test-with-flags TEST_FLAGS='-v -race -covermode atomic -coverprofile $$(COVERAGE_DIR)/combined.txt -bench=. -benchmem -timeout 20m'
 
 
 test-with-flags:
@@ -91,6 +90,12 @@ release:
 	git tag v$(V)
 	@read -p "Press enter to confirm and push to origin ..." && git push origin v$(V)
 
+echo-source:
+	@echo "$(SOURCE)"
+
+echo-database:
+	@echo "$(DATABASE)"
+
 
 define external_deps
 	@echo '-- $(1)';  go list -f '{{join .Deps "\n"}}' $(1) | grep -v github.com/$(REPO_OWNER)/migrate | xargs go list -f '{{if not .Standard}}{{.ImportPath}}{{end}}'
@@ -100,7 +105,8 @@ endef
 
 .PHONY: build build-docker build-cli clean test-short test test-with-flags html-coverage \
         restore-import-paths rewrite-import-paths list-external-deps release \
-        docs kill-docs open-docs kill-orphaned-docker-containers
+		docs kill-docs open-docs kill-orphaned-docker-containers echo-source echo-database
 
 SHELL = /bin/sh
 RAND = $(shell echo $$RANDOM)
+
