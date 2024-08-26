@@ -1,6 +1,11 @@
 //go:build go1.9
 // +build go1.9
 
+// This is a copy of github.com/golang-migrate/migrate/v4/cmd/database/mysql/mysql.go
+// It has been extended to support x-metadata-lock-timeout and x-metadata-lock-retries
+// See this design doc for more on the problem we are trying to solve:
+//  https://docs.google.com/document/d/1TfctnknUy3YHTpt0LmzmWuUHK2Qp3_hGUR446hCZx74/edit
+
 package mysql
 
 import (
@@ -10,6 +15,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"log"
 	nurl "net/url"
 	"os"
 	"strconv"
@@ -40,10 +46,12 @@ var (
 )
 
 type Config struct {
-	MigrationsTable  string
-	DatabaseName     string
-	NoLock           bool
-	StatementTimeout time.Duration
+	MigrationsTable     string
+	DatabaseName        string
+	NoLock              bool
+	StatementTimeout    time.Duration
+	MetadataLockTimeout uint
+	MetadataLockRetries uint
 }
 
 type Mysql struct {
@@ -253,16 +261,36 @@ func (m *Mysql) Open(url string) (database.Driver, error) {
 		}
 	}
 
+	metadataLockTimeoutParam := customParams["x-metadata-lock-timeout"]
+	metadataLockTimeout := uint64(0)
+	if metadataLockTimeoutParam != "" {
+		metadataLockTimeout, err = strconv.ParseUint(metadataLockTimeoutParam, 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("could not parse x-metadata-lock-timeout as uint: %w", err)
+		}
+	}
+
+	metadataLockRetriesParam := customParams["x-metadata-lock-retries"]
+	metadataLockRetries := uint64(0)
+	if metadataLockRetriesParam != "" {
+		metadataLockRetries, err = strconv.ParseUint(metadataLockRetriesParam, 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("could not parse x-metadata-lock-retries as uint: %w", err)
+		}
+	}
+
 	db, err := sql.Open("mysql", config.FormatDSN())
 	if err != nil {
 		return nil, err
 	}
 
 	mx, err := WithInstance(db, &Config{
-		DatabaseName:     config.DBName,
-		MigrationsTable:  customParams["x-migrations-table"],
-		NoLock:           noLock,
-		StatementTimeout: time.Duration(statementTimeout) * time.Millisecond,
+		DatabaseName:        config.DBName,
+		MigrationsTable:     customParams["x-migrations-table"],
+		NoLock:              noLock,
+		StatementTimeout:    time.Duration(statementTimeout) * time.Millisecond,
+		MetadataLockTimeout: uint(metadataLockTimeout),
+		MetadataLockRetries: uint(metadataLockRetries),
 	})
 	if err != nil {
 		return nil, err
@@ -347,12 +375,31 @@ func (m *Mysql) Run(migration io.Reader) error {
 		defer cancel()
 	}
 
-	query := string(migr[:])
-	if _, err := m.conn.ExecContext(ctx, query); err != nil {
-		return database.Error{OrigErr: err, Err: "migration failed", Query: migr}
+	if m.config.MetadataLockTimeout != 0 {
+		query := "SET lock_wait_timeout=?"
+		if _, err := m.conn.ExecContext(ctx, query, m.config.MetadataLockTimeout); err != nil {
+			return &database.Error{OrigErr: err, Query: []byte(query)}
+		}
 	}
 
-	return nil
+	retries := uint(0)
+	for retries <= m.config.MetadataLockRetries {
+		query := string(migr[:])
+		if _, err := m.conn.ExecContext(ctx, query); err != nil {
+			// ERROR 1205: Lock wait timeout exceeded
+			if val, ok := err.(*mysql.MySQLError); ok && val.Number == 1205 {
+				log.Println("Failed to grab metadata lock after", m.config.MetadataLockTimeout, "seconds. Migration is retrying...")
+				retries++
+				// Queries can pile up behind the migration while waiting on the lock.
+				// Sleep for a second to give the DB a little breathing room.
+				time.Sleep(time.Second)
+				continue
+			}
+			return database.Error{OrigErr: err, Err: "migration failed", Query: migr}
+		}
+		return nil
+	}
+	return database.Error{Err: fmt.Sprint("Couldn't obtain metadata lock after ", m.config.MetadataLockRetries, " retries"), Query: migr}
 }
 
 func (m *Mysql) SetVersion(version int, dirty bool) error {
