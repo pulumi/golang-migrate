@@ -1,9 +1,8 @@
 name: CI
 
 on:
-  push:
-  pull_request:
-
+  push: null
+  pull_request: null
 jobs:
   lint:
     name: lint
@@ -60,6 +59,9 @@ jobs:
     # 3. When the workflow is triggered by a tag with `v` prefix
     if: ${{ success() && github.repository == 'golang-migrate/migrate' && startsWith(github.ref, 'refs/tags/v') }}
     steps:
+      - name: Fetch secrets from ESC
+        id: esc-secrets
+        uses: pulumi/esc-action@v1
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -75,7 +77,7 @@ jobs:
       - uses: docker/login-action@v3
         with:
           username: golangmigrate
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          password: ${{ steps.esc-secrets.outputs.DOCKERHUB_TOKEN }}
 
       - run: echo "SOURCE=$(make echo-source)" >> $GITHUB_ENV
       - run: echo "DATABASE=$(make echo-database)" >> $GITHUB_ENV
@@ -90,19 +92,26 @@ jobs:
       - run: gem install package_cloud
       - run: package_cloud push golang-migrate/migrate/ubuntu/bionic dist/migrate.linux-amd64.deb
         env:
-          PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}
+          PACKAGECLOUD_TOKEN: ${{ steps.esc-secrets.outputs.PACKAGECLOUD_TOKEN }}
       - run: package_cloud push golang-migrate/migrate/ubuntu/focal dist/migrate.linux-amd64.deb
         env:
-          PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}
+          PACKAGECLOUD_TOKEN: ${{ steps.esc-secrets.outputs.PACKAGECLOUD_TOKEN }}
       - run: package_cloud push golang-migrate/migrate/ubuntu/jammy dist/migrate.linux-amd64.deb
         env:
-          PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}
+          PACKAGECLOUD_TOKEN: ${{ steps.esc-secrets.outputs.PACKAGECLOUD_TOKEN }}
       - run: package_cloud push golang-migrate/migrate/debian/buster dist/migrate.linux-amd64.deb
         env:
-          PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}
+          PACKAGECLOUD_TOKEN: ${{ steps.esc-secrets.outputs.PACKAGECLOUD_TOKEN }}
       - run: package_cloud push golang-migrate/migrate/debian/bullseye dist/migrate.linux-amd64.deb
         env:
-          PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}
+          PACKAGECLOUD_TOKEN: ${{ steps.esc-secrets.outputs.PACKAGECLOUD_TOKEN }}
       - run: package_cloud push golang-migrate/migrate/debian/bookworm dist/migrate.linux-amd64.deb
         env:
-          PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}
+          PACKAGECLOUD_TOKEN: ${{ steps.esc-secrets.outputs.PACKAGECLOUD_TOKEN }}
+env:
+  ESC_ACTION_OIDC_AUTH: true
+  ESC_ACTION_OIDC_ORGANIZATION: pulumi
+  ESC_ACTION_OIDC_REQUESTED_TOKEN_TYPE: urn:pulumi:token-type:access_token:organization
+  ESC_ACTION_ENVIRONMENT: imports/github-secrets
+  ESC_ACTION_EXPORT_ENVIRONMENT_VARIABLES: false
+permissions: write-all # Equivalent to default permissions plus id-token: write
