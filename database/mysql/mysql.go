@@ -25,8 +25,8 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/go-sql-driver/mysql"
-	"github.com/golang-migrate/migrate/v4/database"
 	"github.com/hashicorp/go-multierror"
+	"github.com/pulumi/golang-migrate/v4/database"
 )
 
 var _ database.Driver = (*Mysql)(nil) // explicit compile time type check

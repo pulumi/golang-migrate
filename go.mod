@@ -1,4 +1,4 @@
-module github.com/golang-migrate/migrate/v4
+module github.com/pulumi/golang-migrate/v4
 
 go 1.18
 

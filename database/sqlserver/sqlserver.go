@@ -12,10 +12,10 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/Azure/go-autorest/autorest/adal"
-	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/database"
 	"github.com/hashicorp/go-multierror"
 	mssql "github.com/microsoft/go-mssqldb" // mssql support
+	"github.com/pulumi/golang-migrate/v4"
+	"github.com/pulumi/golang-migrate/v4/database"
 )
 
 func init() {
