@@ -11,9 +11,9 @@ import (
 
 	"go.uber.org/atomic"
 
-	"github.com/golang-migrate/migrate/v4/database"
 	"github.com/hashicorp/go-multierror"
 	"github.com/lib/pq"
+	"github.com/pulumi/golang-migrate/v4/database"
 	sf "github.com/snowflakedb/gosnowflake"
 )
 
