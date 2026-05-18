@@ -7,7 +7,7 @@ import (
 	"log"
 
 	"github.com/pulumi/golang-migrate/v4"
-	_ "github.com/pulumi/golang-migrate/v4/database/postgres"
+	_ "github.com/pulumi/golang-migrate/v4/database/mysql"
 	"github.com/pulumi/golang-migrate/v4/source/iofs"
 )
 
@@ -19,7 +19,7 @@ func Example() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	m, err := migrate.NewWithSourceInstance("iofs", d, "postgres://postgres@localhost/postgres?sslmode=disable")
+	m, err := migrate.NewWithSourceInstance("iofs", d, "mysql://user:password@tcp(localhost:3306)/dbname")
 	if err != nil {
 		log.Fatal(err)
 	}
