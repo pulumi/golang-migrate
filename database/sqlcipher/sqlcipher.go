@@ -2,18 +2,17 @@ package sqlcipher
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	nurl "net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
-	"go.uber.org/atomic"
-
-	"github.com/hashicorp/go-multierror"
-	_ "github.com/mutecomm/go-sqlcipher/v4"
 	"github.com/pulumi/golang-migrate/v4"
 	"github.com/pulumi/golang-migrate/v4/database"
+	_ "github.com/mutecomm/go-sqlcipher/v4"
 )
 
 func init() {
@@ -73,11 +72,7 @@ func (m *Sqlite) ensureVersionTable() (err error) {
 
 	defer func() {
 		if e := m.Unlock(); e != nil {
-			if err == nil {
-				err = e
-			} else {
-				err = multierror.Append(err, e)
-			}
+			err = errors.Join(err, e)
 		}
 	}()
 
@@ -141,7 +136,7 @@ func (m *Sqlite) Drop() (err error) {
 	}
 	defer func() {
 		if errClose := tables.Close(); errClose != nil {
-			err = multierror.Append(err, errClose)
+			err = errors.Join(err, errClose)
 		}
 	}()
 
@@ -178,14 +173,14 @@ func (m *Sqlite) Drop() (err error) {
 }
 
 func (m *Sqlite) Lock() error {
-	if !m.isLocked.CAS(false, true) {
+	if !m.isLocked.CompareAndSwap(false, true) {
 		return database.ErrLocked
 	}
 	return nil
 }
 
 func (m *Sqlite) Unlock() error {
-	if !m.isLocked.CAS(true, false) {
+	if !m.isLocked.CompareAndSwap(true, false) {
 		return database.ErrNotLocked
 	}
 	return nil
@@ -211,7 +206,7 @@ func (m *Sqlite) executeQuery(query string) error {
 	}
 	if _, err := tx.Exec(query); err != nil {
 		if errRollback := tx.Rollback(); errRollback != nil {
-			err = multierror.Append(err, errRollback)
+			err = errors.Join(err, errRollback)
 		}
 		return &database.Error{OrigErr: err, Query: []byte(query)}
 	}
@@ -246,7 +241,7 @@ func (m *Sqlite) SetVersion(version int, dirty bool) error {
 		query := fmt.Sprintf(`INSERT INTO %s (version, dirty) VALUES (?, ?)`, m.config.MigrationsTable)
 		if _, err := tx.Exec(query, version, dirty); err != nil {
 			if errRollback := tx.Rollback(); errRollback != nil {
-				err = multierror.Append(err, errRollback)
+				err = errors.Join(err, errRollback)
 			}
 			return &database.Error{OrigErr: err, Query: []byte(query)}
 		}

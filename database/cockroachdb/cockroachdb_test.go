@@ -26,13 +26,13 @@ import (
 const defaultPort = 26257
 
 var (
-	opts = dktest.Options{Cmd: []string{"start", "--insecure"}, PortRequired: true, ReadyFunc: isReady}
-	// Released versions: https://www.cockroachlabs.com/docs/releases/
+	opts = dktest.Options{Cmd: []string{"start-single-node", "--insecure"}, PortRequired: true, ReadyFunc: isReady}
+	// Supported versions: https://www.cockroachlabs.com/docs/releases/release-support-policy#supported-versions
 	specs = []dktesting.ContainerSpec{
-		{ImageName: "cockroachdb/cockroach:v1.0.7", Options: opts},
-		{ImageName: "cockroachdb/cockroach:v1.1.9", Options: opts},
-		{ImageName: "cockroachdb/cockroach:v2.0.7", Options: opts},
-		{ImageName: "cockroachdb/cockroach:v2.1.3", Options: opts},
+		{ImageName: "cockroachdb/cockroach:latest-v24.3", Options: opts},
+		{ImageName: "cockroachdb/cockroach:latest-v24.1", Options: opts},
+		{ImageName: "cockroachdb/cockroach:latest-v23.2", Options: opts},
+		{ImageName: "cockroachdb/cockroach:latest-v23.1", Options: opts},
 	}
 )
 
@@ -83,8 +83,6 @@ func createDB(t *testing.T, c dktest.ContainerInfo) {
 }
 
 func Test(t *testing.T) {
-	t.Skip("fails")
-
 	dktesting.ParallelTest(t, specs, func(t *testing.T, ci dktest.ContainerInfo) {
 		createDB(t, ci)
 
@@ -104,8 +102,6 @@ func Test(t *testing.T) {
 }
 
 func TestMigrate(t *testing.T) {
-	t.Skip("fails")
-
 	dktesting.ParallelTest(t, specs, func(t *testing.T, ci dktest.ContainerInfo) {
 		createDB(t, ci)
 
@@ -130,8 +126,6 @@ func TestMigrate(t *testing.T) {
 }
 
 func TestMultiStatement(t *testing.T) {
-	t.Skip("fails")
-
 	dktesting.ParallelTest(t, specs, func(t *testing.T, ci dktest.ContainerInfo) {
 		createDB(t, ci)
 
@@ -162,8 +156,6 @@ func TestMultiStatement(t *testing.T) {
 }
 
 func TestFilterCustomQuery(t *testing.T) {
-	t.Skip("fails")
-
 	dktesting.ParallelTest(t, specs, func(t *testing.T, ci dktest.ContainerInfo) {
 		createDB(t, ci)
 
