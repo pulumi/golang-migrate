@@ -3,18 +3,18 @@ package cockroachdb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	nurl "net/url"
 	"regexp"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/cockroachdb/cockroach-go/v2/crdb"
-	"github.com/hashicorp/go-multierror"
-	"github.com/lib/pq"
 	"github.com/pulumi/golang-migrate/v4"
 	"github.com/pulumi/golang-migrate/v4/database"
-	"go.uber.org/atomic"
+	"github.com/lib/pq"
 )
 
 func init() {
@@ -161,7 +161,7 @@ func (c *CockroachDb) Lock() error {
 			}
 			defer func() {
 				if errClose := rows.Close(); errClose != nil {
-					err = multierror.Append(err, errClose)
+					err = errors.Join(err, errClose)
 				}
 			}()
 
@@ -276,7 +276,7 @@ func (c *CockroachDb) Drop() (err error) {
 	}
 	defer func() {
 		if errClose := tables.Close(); errClose != nil {
-			err = multierror.Append(err, errClose)
+			err = errors.Join(err, errClose)
 		}
 	}()
 
@@ -318,11 +318,7 @@ func (c *CockroachDb) ensureVersionTable() (err error) {
 
 	defer func() {
 		if e := c.Unlock(); e != nil {
-			if err == nil {
-				err = e
-			} else {
-				err = multierror.Append(err, e)
-			}
+			err = errors.Join(err, e)
 		}
 	}()
 

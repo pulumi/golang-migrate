@@ -28,10 +28,19 @@ import (
 	_ "github.com/pulumi/golang-migrate/v4/source/file"
 )
 
+const (
+	pgPassword = "redshift"
+)
+
 var (
-	opts  = dktest.Options{PortRequired: true, ReadyFunc: isReady}
+	opts = dktest.Options{
+		Env:          map[string]string{"POSTGRES_PASSWORD": pgPassword},
+		PortRequired: true,
+		ReadyFunc:    isReady,
+	}
+
 	specs = []dktesting.ContainerSpec{
-		{ImageName: "postgres:8", Options: opts},
+		{ImageName: "migrate/postgres8:8", Options: opts},
 	}
 )
 
@@ -44,7 +53,7 @@ func pgConnectionString(host, port string) string {
 }
 
 func connectionString(schema, host, port string) string {
-	return fmt.Sprintf("%s://postgres@%s:%s/postgres?sslmode=disable", schema, host, port)
+	return fmt.Sprintf("%s://postgres:%s@%s:%s/postgres?sslmode=disable", schema, pgPassword, host, port)
 }
 
 func isReady(ctx context.Context, c dktest.ContainerInfo) bool {
@@ -76,8 +85,6 @@ func isReady(ctx context.Context, c dktest.ContainerInfo) bool {
 }
 
 func Test(t *testing.T) {
-	t.Skip("fails")
-
 	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
 		ip, port, err := c.FirstPort()
 		if err != nil {
@@ -100,8 +107,6 @@ func Test(t *testing.T) {
 }
 
 func TestMigrate(t *testing.T) {
-	t.Skip("fails")
-
 	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
 		ip, port, err := c.FirstPort()
 		if err != nil {
@@ -128,8 +133,6 @@ func TestMigrate(t *testing.T) {
 }
 
 func TestMultiStatement(t *testing.T) {
-	t.Skip("fails")
-
 	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
 		ip, port, err := c.FirstPort()
 		if err != nil {
@@ -163,8 +166,6 @@ func TestMultiStatement(t *testing.T) {
 }
 
 func TestErrorParsing(t *testing.T) {
-	t.Skip("fails")
-
 	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
 		ip, port, err := c.FirstPort()
 		if err != nil {
@@ -194,15 +195,13 @@ func TestErrorParsing(t *testing.T) {
 }
 
 func TestFilterCustomQuery(t *testing.T) {
-	t.Skip("fails")
-
 	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
 		ip, port, err := c.FirstPort()
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		addr := fmt.Sprintf("postgres://postgres@%v:%v/postgres?sslmode=disable&x-custom=foobar", ip, port)
+		addr := fmt.Sprintf("postgres://postgres:%s@%v:%v/postgres?sslmode=disable&x-custom=foobar", pgPassword, ip, port)
 		p := &Redshift{}
 		d, err := p.Open(addr)
 		if err != nil {
@@ -217,8 +216,6 @@ func TestFilterCustomQuery(t *testing.T) {
 }
 
 func TestWithSchema(t *testing.T) {
-	t.Skip("fails")
-
 	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
 		ip, port, err := c.FirstPort()
 		if err != nil {
@@ -246,7 +243,7 @@ func TestWithSchema(t *testing.T) {
 		}
 
 		// re-connect using that schema
-		d2, err := p.Open(fmt.Sprintf("postgres://postgres@%v:%v/postgres?sslmode=disable&search_path=foobar", ip, port))
+		d2, err := p.Open(fmt.Sprintf("postgres://postgres:%s@%v:%v/postgres?sslmode=disable&search_path=foobar", pgPassword, ip, port))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -292,8 +289,6 @@ func TestWithInstance(t *testing.T) {
 }
 
 func TestRedshift_Lock(t *testing.T) {
-	t.Skip("fails")
-
 	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
 		ip, port, err := c.FirstPort()
 		if err != nil {
@@ -334,8 +329,6 @@ func TestRedshift_Lock(t *testing.T) {
 }
 
 func Test_computeLineFromPos(t *testing.T) {
-	t.Skip("fails")
-
 	testcases := []struct {
 		pos      int
 		wantLine uint
@@ -385,10 +378,10 @@ func Test_computeLineFromPos(t *testing.T) {
 				t.Run(name, func(t *testing.T) {
 					input := tc.input
 					if crlf {
-						input = strings.Replace(input, "\n", "\r\n", -1)
+						input = strings.ReplaceAll(input, "\n", "\r\n")
 					}
 					if nonASCII {
-						input = strings.Replace(input, "FROM", "FRÖM", -1)
+						input = strings.ReplaceAll(input, "FROM", "FRÖM")
 					}
 					gotLine, gotCol, gotOK := computeLineFromPos(input, tc.pos)
 
