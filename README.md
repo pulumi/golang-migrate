@@ -7,6 +7,12 @@
 [![GitHub Release](https://img.shields.io/github/release/golang-migrate/migrate.svg)](https://github.com/golang-migrate/migrate/releases)
 [![Go Report Card](https://goreportcard.com/badge/github.com/pulumi/golang-migrate/v4)](https://goreportcard.com/report/github.com/pulumi/golang-migrate/v4)
 
+---
+
+> **This is Pulumi's fork of `golang-migrate/migrate`.** It carries a small patchset (mysql metadata-lock retries, hardcoded mysql-only build) on top of upstream. If you're maintaining the fork or integrating it into a Pulumi consumer, read **[FORK.md](./FORK.md)** first. The rest of this README is upstream's, and most of it (the non-mysql drivers, sources, and build matrix it describes) does not apply to this fork.
+
+---
+
 # migrate
 
 __Database migrations written in Go. Use as [CLI](#cli-usage) or import as [library](#use-in-your-go-project).__
