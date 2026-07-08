@@ -1,7 +1,6 @@
 //go:build go1.9
-// +build go1.9
 
-// This is a copy of github.com/golang-migrate/migrate/v4/cmd/database/mysql/mysql.go
+// This is a copy of github.com/pulumi/golang-migrate/v4/cmd/database/mysql/mysql.go
 // It has been extended to support x-metadata-lock-timeout and x-metadata-lock-retries
 // See this design doc for more on the problem we are trying to solve:
 //  https://docs.google.com/document/d/1TfctnknUy3YHTpt0LmzmWuUHK2Qp3_hGUR446hCZx74/edit
@@ -13,6 +12,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -20,12 +20,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
-	"go.uber.org/atomic"
-
 	"github.com/go-sql-driver/mysql"
-	"github.com/hashicorp/go-multierror"
 	"github.com/pulumi/golang-migrate/v4/database"
 )
 
@@ -42,7 +40,7 @@ var (
 	ErrNilConfig        = fmt.Errorf("no config")
 	ErrNoDatabaseName   = fmt.Errorf("no database name")
 	ErrAppendPEM        = fmt.Errorf("failed to append PEM")
-	ErrTLSCertKeyConfig = fmt.Errorf("To use TLS client authentication, both x-tls-cert and x-tls-key must not be empty")
+	ErrTLSCertKeyConfig = fmt.Errorf("to use TLS client authentication, both x-tls-cert and x-tls-key must not be empty")
 )
 
 type Config struct {
@@ -411,7 +409,7 @@ func (m *Mysql) SetVersion(version int, dirty bool) error {
 	query := "DELETE FROM `" + m.config.MigrationsTable + "` LIMIT 1"
 	if _, err := tx.ExecContext(context.Background(), query); err != nil {
 		if errRollback := tx.Rollback(); errRollback != nil {
-			err = multierror.Append(err, errRollback)
+			err = errors.Join(err, errRollback)
 		}
 		return &database.Error{OrigErr: err, Query: []byte(query)}
 	}
@@ -423,7 +421,7 @@ func (m *Mysql) SetVersion(version int, dirty bool) error {
 		query := "INSERT INTO `" + m.config.MigrationsTable + "` (version, dirty) VALUES (?, ?)"
 		if _, err := tx.ExecContext(context.Background(), query, version, dirty); err != nil {
 			if errRollback := tx.Rollback(); errRollback != nil {
-				err = multierror.Append(err, errRollback)
+				err = errors.Join(err, errRollback)
 			}
 			return &database.Error{OrigErr: err, Query: []byte(query)}
 		}
@@ -465,7 +463,7 @@ func (m *Mysql) Drop() (err error) {
 	}
 	defer func() {
 		if errClose := tables.Close(); errClose != nil {
-			err = multierror.Append(err, errClose)
+			err = errors.Join(err, errClose)
 		}
 	}()
 
@@ -518,11 +516,7 @@ func (m *Mysql) ensureVersionTable() (err error) {
 
 	defer func() {
 		if e := m.Unlock(); e != nil {
-			if err == nil {
-				err = e
-			} else {
-				err = multierror.Append(err, e)
-			}
+			err = errors.Join(err, e)
 		}
 	}()
 

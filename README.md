@@ -1,11 +1,17 @@
 [![GitHub Workflow Status (branch)](https://img.shields.io/github/actions/workflow/status/golang-migrate/migrate/ci.yaml?branch=master)](https://github.com/golang-migrate/migrate/actions/workflows/ci.yaml?query=branch%3Amaster)
-[![GoDoc](https://pkg.go.dev/badge/github.com/golang-migrate/migrate)](https://pkg.go.dev/github.com/golang-migrate/migrate/v4)
+[![GoDoc](https://pkg.go.dev/badge/github.com/golang-migrate/migrate)](https://pkg.go.dev/github.com/pulumi/golang-migrate/v4)
 [![Coverage Status](https://img.shields.io/coveralls/github/golang-migrate/migrate/master.svg)](https://coveralls.io/github/golang-migrate/migrate?branch=master)
 [![packagecloud.io](https://img.shields.io/badge/deb-packagecloud.io-844fec.svg)](https://packagecloud.io/golang-migrate/migrate?filter=debs)
 [![Docker Pulls](https://img.shields.io/docker/pulls/migrate/migrate.svg)](https://hub.docker.com/r/migrate/migrate/)
-![Supported Go Versions](https://img.shields.io/badge/Go-1.21%2C%201.22-lightgrey.svg)
+![Supported Go Versions](https://img.shields.io/badge/Go-1.24%2C%201.25-lightgrey.svg)
 [![GitHub Release](https://img.shields.io/github/release/golang-migrate/migrate.svg)](https://github.com/golang-migrate/migrate/releases)
-[![Go Report Card](https://goreportcard.com/badge/github.com/golang-migrate/migrate/v4)](https://goreportcard.com/report/github.com/golang-migrate/migrate/v4)
+[![Go Report Card](https://goreportcard.com/badge/github.com/pulumi/golang-migrate/v4)](https://goreportcard.com/report/github.com/pulumi/golang-migrate/v4)
+
+---
+
+> **This is Pulumi's fork of `golang-migrate/migrate`.** It carries a small patchset (mysql metadata-lock retries, hardcoded mysql-only build) on top of upstream. If you're maintaining the fork or integrating it into a Pulumi consumer, read **[FORK.md](./FORK.md)** first. The rest of this README is upstream's, and most of it (the non-mysql drivers, sources, and build matrix it describes) does not apply to this fork.
+
+---
 
 # migrate
 
@@ -87,7 +93,7 @@ Source drivers read migrations from local or remote sources. [Add a new source?]
 * Handles ctrl+c (SIGINT) gracefully.
 * No config search paths, no config files, no magic ENV var injections.
 
-__[CLI Documentation](cmd/migrate)__
+[CLI Documentation](cmd/migrate) (includes CLI install instructions)
 
 ### Basic usage
 
@@ -111,13 +117,13 @@ $ docker run -v {{ migration dir }}:/migrations --network host migrate/migrate
 * Uses `io.Reader` streams internally for low memory overhead.
 * Thread-safe and no goroutine leaks.
 
-__[Go Documentation](https://pkg.go.dev/github.com/golang-migrate/migrate/v4)__
+__[Go Documentation](https://pkg.go.dev/github.com/pulumi/golang-migrate/v4)__
 
 ```go
 import (
-    "github.com/golang-migrate/migrate/v4"
-    _ "github.com/golang-migrate/migrate/v4/database/postgres"
-    _ "github.com/golang-migrate/migrate/v4/source/github"
+    "github.com/pulumi/golang-migrate/v4"
+    _ "github.com/pulumi/golang-migrate/v4/database/postgres"
+    _ "github.com/pulumi/golang-migrate/v4/source/github"
 )
 
 func main() {
@@ -134,9 +140,9 @@ Want to use an existing database client?
 import (
     "database/sql"
     _ "github.com/lib/pq"
-    "github.com/golang-migrate/migrate/v4"
-    "github.com/golang-migrate/migrate/v4/database/postgres"
-    _ "github.com/golang-migrate/migrate/v4/source/file"
+    "github.com/pulumi/golang-migrate/v4"
+    "github.com/pulumi/golang-migrate/v4/database/postgres"
+    _ "github.com/pulumi/golang-migrate/v4/source/file"
 )
 
 func main() {
@@ -145,7 +151,7 @@ func main() {
     m, err := migrate.NewWithDatabaseInstance(
         "file:///migrations",
         "postgres", driver)
-    m.Up() // or m.Step(2) if you want to explicitly set the number of migrations to run
+    m.Up() // or m.Steps(2) if you want to explicitly set the number of migrations to run
 }
 ```
 
@@ -180,8 +186,8 @@ Check out [migradaptor](https://github.com/musinit/migradaptor/).
 
 Version | Supported? | Import | Notes
 --------|------------|--------|------
-**master** | :white_check_mark: | `import "github.com/golang-migrate/migrate/v4"` | New features and bug fixes arrive here first |
-**v4** | :white_check_mark: | `import "github.com/golang-migrate/migrate/v4"` | Used for stable releases |
+**master** | :white_check_mark: | `import "github.com/pulumi/golang-migrate/v4"` | New features and bug fixes arrive here first |
+**v4** | :white_check_mark: | `import "github.com/pulumi/golang-migrate/v4"` | Used for stable releases |
 **v3** | :x: | `import "github.com/golang-migrate/migrate"` (with package manager) or `import "gopkg.in/golang-migrate/migrate.v3"` (not recommended) | **DO NOT USE** - No longer supported |
 
 ## Development and Contributing
