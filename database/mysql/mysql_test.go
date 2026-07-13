@@ -5,90 +5,108 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"database/sql"
-	sqldriver "database/sql/driver"
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"log"
 	"math/big"
 	"math/rand"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
-	"github.com/dhui/dktest"
 	"github.com/go-sql-driver/mysql"
 	"github.com/pulumi/golang-migrate/v4"
 	dt "github.com/pulumi/golang-migrate/v4/database/testing"
-	"github.com/pulumi/golang-migrate/v4/dktesting"
 	_ "github.com/pulumi/golang-migrate/v4/source/file"
 	"github.com/stretchr/testify/assert"
+	"github.com/testcontainers/testcontainers-go"
+	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
 )
 
-const defaultPort = 3306
+// Supported versions: https://www.mysql.com/support/supportedplatforms/database.html
+var mysqlImages = []string{"mysql:8.0", "mysql:8.4", "mysql:9.0"}
 
-var (
-	opts = dktest.Options{
-		Env:          map[string]string{"MYSQL_ROOT_PASSWORD": "root", "MYSQL_DATABASE": "public"},
-		PortRequired: true, ReadyFunc: isReady,
-	}
-	optsAnsiQuotes = dktest.Options{
-		Env:          map[string]string{"MYSQL_ROOT_PASSWORD": "root", "MYSQL_DATABASE": "public"},
-		PortRequired: true, ReadyFunc: isReady,
-		Cmd: []string{"--sql-mode=ANSI_QUOTES"},
-	}
-	// Supported versions: https://www.mysql.com/support/supportedplatforms/database.html
-	specs = []dktesting.ContainerSpec{
-		{ImageName: "mysql:8.0", Options: opts},
-		{ImageName: "mysql:8.4", Options: opts},
-		{ImageName: "mysql:9.0", Options: opts},
-	}
-	specsAnsiQuotes = []dktesting.ContainerSpec{
-		{ImageName: "mysql:8.0", Options: optsAnsiQuotes},
-		{ImageName: "mysql:8.4", Options: optsAnsiQuotes},
-		{ImageName: "mysql:9.0", Options: optsAnsiQuotes},
-	}
-)
+// startMySQL starts a MySQL testcontainer for the given image, returning a
+// mysql:// DSN once the server is confirmed to accept connections. The
+// container is torn down automatically when t completes.
+func startMySQL(t *testing.T, image string, cmdArgs ...string) string {
+	t.Helper()
+	ctx := context.Background()
 
-func isReady(ctx context.Context, c dktest.ContainerInfo) bool {
-	ip, port, err := c.Port(defaultPort)
+	opts := []testcontainers.ContainerCustomizer{
+		tcmysql.WithUsername("root"),
+		tcmysql.WithPassword("root"),
+		tcmysql.WithDatabase("public"),
+	}
+	if len(cmdArgs) > 0 {
+		opts = append(opts, testcontainers.WithCmdArgs(cmdArgs...))
+	}
+
+	ctr, err := tcmysql.Run(ctx, image, opts...)
+	testcontainers.CleanupContainer(t, ctr)
 	if err != nil {
-		return false
+		t.Fatal(err)
 	}
 
-	db, err := sql.Open("mysql", fmt.Sprintf("root:root@tcp(%v:%v)/public", ip, port))
+	connStr, err := ctr.ConnectionString(ctx)
 	if err != nil {
-		return false
+		t.Fatal(err)
 	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			log.Println("close error:", err)
-		}
-	}()
-	if err = db.PingContext(ctx); err != nil {
-		switch err {
-		case sqldriver.ErrBadConn, mysql.ErrInvalidConn:
-			return false
-		default:
-			fmt.Println(err)
-		}
-		return false
-	}
+	addr := "mysql://" + connStr
 
-	return true
+	waitForConnection(t, ctx, addr)
+	return addr
+}
+
+// waitForConnection blocks until addr accepts a real client connection. The
+// module's built-in wait strategy only confirms the startup log line
+// appeared; a brief window can remain before the server accepts TCP conns.
+func waitForConnection(t *testing.T, ctx context.Context, addr string) {
+	t.Helper()
+	dsn := strings.TrimPrefix(addr, "mysql://")
+
+	deadline := time.Now().Add(60 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		db, err := sql.Open("mysql", dsn)
+		if err == nil {
+			lastErr = db.PingContext(ctx)
+			_ = db.Close()
+			if lastErr == nil {
+				return
+			}
+		} else {
+			lastErr = err
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("mysql at %s did not become ready: %v", addr, lastErr)
+}
+
+// parallelMySQLTest runs testFunc against a fresh container per image in
+// mysqlImages, in parallel subtests. In -short mode only the first image
+// runs. cmdArgs, if non-empty, are appended to the container's entrypoint.
+func parallelMySQLTest(t *testing.T, cmdArgs []string, testFunc func(t *testing.T, addr string)) {
+	for i, image := range mysqlImages {
+		if i > 0 && testing.Short() {
+			t.Logf("Skipping %v in short mode", image)
+			continue
+		}
+		t.Run(image, func(t *testing.T) {
+			t.Parallel()
+			addr := startMySQL(t, image, cmdArgs...)
+			testFunc(t, addr)
+		})
+	}
 }
 
 func Test(t *testing.T) {
 	// mysql.SetLogger(mysql.Logger(log.New(io.Discard, "", log.Ltime)))
 
-	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
-		ip, port, err := c.Port(defaultPort)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		addr := fmt.Sprintf("mysql://root:root@tcp(%v:%v)/public", ip, port)
+	parallelMySQLTest(t, nil, func(t *testing.T, addr string) {
 		p := &Mysql{}
 		d, err := p.Open(addr)
 		if err != nil {
@@ -115,13 +133,7 @@ func Test(t *testing.T) {
 func TestMigrate(t *testing.T) {
 	// mysql.SetLogger(mysql.Logger(log.New(io.Discard, "", log.Ltime)))
 
-	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
-		ip, port, err := c.Port(defaultPort)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		addr := fmt.Sprintf("mysql://root:root@tcp(%v:%v)/public", ip, port)
+	parallelMySQLTest(t, nil, func(t *testing.T, addr string) {
 		p := &Mysql{}
 		d, err := p.Open(addr)
 		if err != nil {
@@ -153,13 +165,7 @@ func TestMigrate(t *testing.T) {
 func TestMigrateAnsiQuotes(t *testing.T) {
 	// mysql.SetLogger(mysql.Logger(log.New(io.Discard, "", log.Ltime)))
 
-	dktesting.ParallelTest(t, specsAnsiQuotes, func(t *testing.T, c dktest.ContainerInfo) {
-		ip, port, err := c.Port(defaultPort)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		addr := fmt.Sprintf("mysql://root:root@tcp(%v:%v)/public", ip, port)
+	parallelMySQLTest(t, []string{"--sql-mode=ANSI_QUOTES"}, func(t *testing.T, addr string) {
 		p := &Mysql{}
 		d, err := p.Open(addr)
 		if err != nil {
@@ -189,13 +195,7 @@ func TestMigrateAnsiQuotes(t *testing.T) {
 }
 
 func TestLockWorks(t *testing.T) {
-	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
-		ip, port, err := c.Port(defaultPort)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		addr := fmt.Sprintf("mysql://root:root@tcp(%v:%v)/public", ip, port)
+	parallelMySQLTest(t, nil, func(t *testing.T, addr string) {
 		p := &Mysql{}
 		d, err := p.Open(addr)
 		if err != nil {
@@ -238,13 +238,7 @@ func TestNoLockParamValidation(t *testing.T) {
 }
 
 func TestNoLockWorks(t *testing.T) {
-	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
-		ip, port, err := c.Port(defaultPort)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		addr := fmt.Sprintf("mysql://root:root@tcp(%v:%v)/public", ip, port)
+	parallelMySQLTest(t, nil, func(t *testing.T, addr string) {
 		p := &Mysql{}
 		d, err := p.Open(addr)
 		if err != nil {
