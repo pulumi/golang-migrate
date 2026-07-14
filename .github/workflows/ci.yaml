@@ -22,7 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ["1.24.x", "1.25.x"]
+        # testcontainers-go requires Go >= 1.25; dropped 1.24.x from the matrix
+        # when the mysql package switched onto it.
+        go: ["1.25.x"]
     steps:
       - uses: actions/checkout@v4
 

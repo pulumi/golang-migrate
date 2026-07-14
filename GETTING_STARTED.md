@@ -49,5 +49,5 @@ For details and example of usage see [this comment](https://github.com/golang-mi
 - [Best practices](MIGRATIONS.md)
 - [FAQ](FAQ.md)
 - Tools for testing your migrations in a container:
-	- https://github.com/dhui/dktest
+	- https://github.com/testcontainers/testcontainers-go (used by this fork's own `database/mysql` tests)
 	- https://github.com/ory/dockertest
