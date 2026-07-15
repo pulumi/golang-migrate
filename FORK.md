@@ -12,7 +12,7 @@ If you're a consumer (pulumi/service, pulumi-self-hosted-installers), skip to [C
 
 ## What we carry
 
-Five commits on top of `upstream/master`:
+On top of `upstream/master` (currently synced past the `v4.19.1` tag, up to upstream's HEAD as of the last sync — see the merge row below):
 
 | Commit subject | What it changes |
 |---|---|
@@ -21,8 +21,11 @@ Five commits on top of `upstream/master`:
 | Rename module path to github.com/pulumi/golang-migrate/v4 | Mechanical sed pass renaming the module. Re-run on every upstream sync (see below). |
 | Prune to mysql-only: drop non-mysql drivers and sources | Deletes all non-MySQL database drivers, non-`file`/`iofs`/`stub`/`testing` sources, the `internal/cli/build_*.go` build-tag registration files, and the deprecated `cli/` package. Hardcodes mysql + file imports directly in `cmd/migrate/main.go`. |
 | Slim Makefile, drop dead Dockerfiles/Travis, tidy go.mod | Removes the `DATABASE`/`SOURCE` Makefile variables, the broken Dockerfile variants, `.travis.yml`, and `docker-deploy.sh`. `go mod tidy` drops the transitive deps from removed drivers. |
-| Bump docker/docker to v28.5.2 | Vulnerability hygiene for the test-only docker client surface. `go 1.24.0` minimum was unchanged at this commit; no `toolchain` directive — we deliberately don't pin above what `golangci-lint-action`'s prebuilt binary supports, since pinning a 1.26+ toolchain breaks lint until upstream cuts a new release. |
-| Switch `database/mysql` tests from dktest to testcontainers-go | `dhui/dktest` hardcodes Docker API version 1.41 (`dktest.go:194`), which modern Docker daemons (including local colima installs) reject as below their minimum-supported floor — the tests could never run locally, only on GitHub Actions' older runner daemon. testcontainers-go negotiates the API version instead, matches the `testcontainers-go/modules/mysql` pattern `pulumi/service` already uses for its own integration tests, and is far more actively maintained. Deleted the `dktesting/` wrapper package entirely. Pulls in `testcontainers-go`'s Go 1.25 floor, so `go.mod`'s minimum moved from `1.24.0` to `1.25.0` and the CI matrix dropped its `1.24.x` lane — a non-issue for consumers, since `pulumi/service` already requires Go 1.26.4. Locally with colima, set `TESTCONTAINERS_RYUK_DISABLED=true` — colima's VM-backed Docker can't satisfy the cleanup-reaper container's socket bind-mount; GitHub Actions' real Docker daemon doesn't need this. |
+| Bump docker/docker to v28.5.2 | Vulnerability hygiene for the test-only docker client surface. `go 1.24.0` minimum was unchanged at this commit; no `toolchain` directive — we deliberately don't pin above what `golangci-lint-action`'s prebuilt binary supports, since pinning a 1.26+ toolchain breaks lint until upstream cuts a new release. Superseded — see "Delete dead `testing/` helper package" below. |
+| Switch `database/mysql` tests from dktest to testcontainers-go | `dhui/dktest` hardcodes Docker API version 1.41 (`dktest.go:194`), which modern Docker daemons (including local colima installs) reject as below their minimum-supported floor — the tests could never run locally, only on GitHub Actions' older runner daemon. testcontainers-go negotiates the API version instead, matches the `testcontainers-go/modules/mysql` pattern `pulumi/service` already uses for its own integration tests, and is far more actively maintained. Deleted the `dktesting/` wrapper package entirely. Pulls in `testcontainers-go`'s Go 1.25 floor, so `go.mod`'s minimum moved from `1.24.0` to `1.25.0` and the CI matrix dropped its `1.24.x` lane — a non-issue for consumers, since `pulumi/service` already requires Go 1.26.4. Locally with colima, set `TESTCONTAINERS_RYUK_DISABLED=true` — colima's VM-backed Docker can't satisfy the cleanup-reaper container's socket bind-mount; GitHub Actions' real Docker daemon doesn't need this. Note: `testcontainers-go` itself has since migrated off `docker/docker` onto `moby/moby/api` + `moby/moby/client` (as of v0.43.0, the version we're on) — it no longer contributes `docker/docker` to our dependency graph at all. |
+| Bump vulnerable transitive deps: x/crypto, grpc-go, otel | Routine Dependabot-alert cleanup. `golang.org/x/crypto` → 0.54.0, `google.golang.org/grpc` → 1.82.0 (auth-bypass CVE), `go.opentelemetry.io/otel/{sdk,exporters/otlp/otlptrace/otlptracehttp}` → 1.44.0. |
+| Delete dead `testing/` helper package | `testing/docker.go` and `testing/testing.go` were a pre-testcontainers-go helper package for spinning up test containers directly against `docker/docker`'s low-level client API. Nothing has imported it since the mysql tests moved to testcontainers-go — it was already marked `// Deprecated` in its own header. Deleting it removes our last direct `docker/docker` import, which in turn drops `google.golang.org/grpc` and `otel/exporters/otlp/otlptrace/otlptracehttp` out of the module graph entirely (they were only there to satisfy `docker/docker`'s own tracing instrumentation) — clears the docker/docker, grpc, and otlptracehttp Dependabot alerts in one deletion, no moby/moby migration needed. |
+| Merge `upstream/master` (past the `v4.19.1` tag) | Upstream's `v4.19.1` is still their latest *tagged release*, but `master` had moved 9 commits past it. Pulled those in via `git merge` rather than cherry-pick, since several were dependency bumps worth reconciling against ours (kept our newer pins where we'd already bumped further; kept our pruned `go.mod` over upstream's full unpruned driver set). Left out the yugabyte test update and a pgx v5 bump from that range — both touch drivers this fork prunes. Puts us at parity with (and slightly ahead of, pending upstream's next tag) `golang-migrate/migrate`'s latest release. |
 
 The substantive hand-maintained edits are tiny: ~73 lines in `mysql.go`, a slim Makefile, and a 6-line hardcoded-imports patch to `cmd/migrate/main.go`. Everything else is mechanical (sed, deletions, `go mod tidy` output).
 
@@ -49,18 +52,17 @@ git cherry-pick <sha of "Slim Makefile...">
 go mod tidy
 git add go.mod go.sum && git commit --amend --no-edit
 
-# 4. Cherry-pick the docker/docker bump
-git cherry-pick <sha of "Bump docker/docker...">
-
-# 5. Verify
+# 4. Verify
 go build ./... && go vet ./... && go test -short ./...
 
-# 6. Open PR
+# 5. Open PR
 git push -u origin kmosher/upstream-sync-YYYYMMDD
 gh pr create --draft --base master --title "Sync to upstream <version>"
 ```
 
 Find the previous SHAs with: `git log master --no-merges --grep='Add metadata lock retries'` etc.
+
+If upstream has accumulated more than a handful of commits since our last sync point (check with `git log <our-last-synced-tag>..upstream/master`), a straight `git merge upstream/master` can be less error-prone than cherry-picking each one individually — resolve conflicts by keeping our pruned `go.mod`/deleted-driver state, then re-run `go mod tidy` and the full test suite. Skip any upstream commits that touch drivers this fork prunes (postgres, cassandra, yugabyte, etc.) — they'll show as modify/delete conflicts; keep the deletion.
 
 ### Conflict expectations
 
@@ -162,7 +164,7 @@ archive_override(
 Run `govulncheck ./...` to scan the tree. After a sync, expect:
 
 - **CLI binary + library import surface**: clean. The production import graph is `go-sql-driver/mysql` plus our own packages — no third-party CVEs.
-- **Test-only paths (`testing/docker.go`, `database/mysql`'s testcontainers-go usage)**: may report `docker/docker` advisories. These are unreachable from consumer code. Leave them be unless upstream `docker/docker` ships a fix worth pulling in.
+- **Test-only paths (`database/mysql`'s testcontainers-go usage)**: `testcontainers-go` v0.43.0+ depends on `moby/moby/{api,client}`, not `docker/docker` — there's no `docker/docker` import anywhere in this tree anymore (the old `testing/` helper package that pulled it in directly was deleted; see the table above). If a future `testcontainers-go` bump reintroduces a `docker/docker` alert, check whether it's reachable before assuming it needs a fix — test-only transitive deps often aren't.
 - **Stdlib**: depends on whatever Go the builder has installed. We don't pin a `toolchain` (see the bump-row above) — consumers and CI pick their own. If a stdlib CVE matters to a specific consumer, they should bump their own Go install.
 
 GitHub Dependabot will rescan `go.sum` after each merge and converge on the same answer (typically within a few minutes). Dependabot may surface alerts on indirect deps even when govulncheck reports them as unreachable — trust govulncheck's reachability analysis.
