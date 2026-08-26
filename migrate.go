@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pulumi/golang-migrate/v4/database"
@@ -68,7 +69,8 @@ type Migrate struct {
 	GracefulStop chan bool
 	isLockedMu   *sync.Mutex
 
-	isGracefulStop bool
+	// atomic: set by the reader goroutine when a stop arrives, checked by the caller's goroutine between migrations.
+	isGracefulStop atomic.Bool
 	isLocked       bool
 
 	// PrefetchMigrations defaults to DefaultPrefetchMigrations,
@@ -813,13 +815,13 @@ func (m *Migrate) versionExists(version uint) (result error) {
 // because a stop signal was received on the GracefulStop channel.
 // Calls are cheap and this function is not blocking.
 func (m *Migrate) stop() bool {
-	if m.isGracefulStop {
+	if m.isGracefulStop.Load() {
 		return true
 	}
 
 	select {
 	case <-m.GracefulStop:
-		m.isGracefulStop = true
+		m.isGracefulStop.Store(true)
 		return true
 
 	default:
