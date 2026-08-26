@@ -1409,3 +1409,29 @@ func equalDbSeq(t *testing.T, i int, expected migrationSequence, got *dStub.Stub
 		t.Fatalf("\nexpected sequence %v,\ngot               %v, in %v", bs, got.MigrationSequence, i)
 	}
 }
+
+func TestGracefulStopConcurrent(t *testing.T) {
+	migrations := source.NewMigrations()
+	for v := uint(1); v <= 500; v++ {
+		migrations.Append(&source.Migration{Version: v, Direction: source.Up, Identifier: "CREATE"})
+	}
+	for range 25 {
+		m, _ := New("stub://", "stub://")
+		m.sourceDrv.(*sStub.Stub).Migrations = migrations
+
+		sent := make(chan struct{})
+		go func() {
+			m.GracefulStop <- true
+			close(sent)
+		}()
+		if err := m.Up(); err != nil {
+			t.Fatal(err)
+		}
+		<-sent
+		if _, dirty, err := m.Version(); err != nil && err != ErrNilVersion {
+			t.Fatal(err)
+		} else if dirty {
+			t.Fatal("graceful stop left the database dirty")
+		}
+	}
+}
