@@ -154,6 +154,15 @@ func TestRunWithMetadataLockRetries(t *testing.T) {
 		assert.Len(t, *slept, 3, "no pause after the last attempt")
 	})
 
+	t.Run("links the help URL when the schedule is exhausted", func(t *testing.T) {
+		m, _ := fakeRetries([]uint{1, 1}, 0)
+		m.config.MetadataLockHelpURL = "https://example.com/doc#locks"
+		attempt, _ := scripted(lockErr, lockErr)
+
+		err := m.runWithMetadataLockRetries(migr, attempt)
+		assert.ErrorContains(t, err, "timeouts of [1 1] seconds. See https://example.com/doc#locks")
+	})
+
 	t.Run("returns other errors without retrying", func(t *testing.T) {
 		m, slept := fakeRetries([]uint{1, 4}, time.Second)
 		syntaxErr := database.Error{OrigErr: &mysql.MySQLError{Number: 1064}, Err: "migration failed", Query: migr}

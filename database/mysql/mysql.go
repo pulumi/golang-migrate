@@ -56,6 +56,9 @@ type Config struct {
 	// MetadataLockRetryDelay is the minimum pause between attempts; each pause is drawn
 	// uniformly from [delay, 2*delay).
 	MetadataLockRetryDelay time.Duration
+	// MetadataLockHelpURL, if set, is appended to the metadata-lock retry log lines and
+	// to the error returned when the schedule is exhausted.
+	MetadataLockHelpURL string
 }
 
 type Mysql struct {
@@ -447,14 +450,22 @@ func (m *Mysql) runWithMetadataLockRetries(migr []byte, attempt func(timeout uin
 			break
 		}
 		pause := m.retryPause()
-		log.Printf("Failed to grab metadata lock within %ds (attempt %d of %d). Retrying in %s with a %ds timeout...",
-			timeout, i+1, len(timeouts), pause.Round(100*time.Millisecond), timeouts[i+1])
+		log.Printf("Failed to grab metadata lock within %ds (attempt %d of %d). Retrying in %s with a %ds timeout.%s",
+			timeout, i+1, len(timeouts), pause.Round(100*time.Millisecond), timeouts[i+1], m.helpSuffix())
 		m.doSleep(pause)
 	}
 	return database.Error{
-		Err:   fmt.Sprintf("couldn't obtain metadata lock in %d attempts with timeouts of %v seconds", len(timeouts), timeouts),
+		Err: fmt.Sprintf("couldn't obtain metadata lock in %d attempts with timeouts of %v seconds.%s",
+			len(timeouts), timeouts, m.helpSuffix()),
 		Query: migr,
 	}
+}
+
+func (m *Mysql) helpSuffix() string {
+	if m.config.MetadataLockHelpURL == "" {
+		return ""
+	}
+	return " See " + m.config.MetadataLockHelpURL
 }
 
 func isLockWaitTimeout(err error) bool {
