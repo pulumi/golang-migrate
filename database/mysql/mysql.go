@@ -1,7 +1,5 @@
-//go:build go1.9
-
 // This is a copy of github.com/pulumi/golang-migrate/v4/cmd/database/mysql/mysql.go
-// It has been extended to support x-metadata-lock-timeout and x-metadata-lock-retries
+// It has been extended to support x-metadata-lock-timeouts and x-metadata-lock-retry-delay
 // See this design doc for more on the problem we are trying to solve:
 //  https://docs.google.com/document/d/1TfctnknUy3YHTpt0LmzmWuUHK2Qp3_hGUR446hCZx74/edit
 
@@ -16,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand/v2"
 	nurl "net/url"
 	"os"
 	"strconv"
@@ -44,12 +43,19 @@ var (
 )
 
 type Config struct {
-	MigrationsTable     string
-	DatabaseName        string
-	NoLock              bool
-	StatementTimeout    time.Duration
-	MetadataLockTimeout uint
-	MetadataLockRetries uint
+	MigrationsTable  string
+	DatabaseName     string
+	NoLock           bool
+	StatementTimeout time.Duration
+
+	// MetadataLockTimeouts is the lock_wait_timeout, in seconds, for each attempt at a
+	// migration file: an attempt that times out on a metadata lock (ER_LOCK_WAIT_TIMEOUT)
+	// moves on to the next entry, and the file fails once the list is exhausted. Empty
+	// leaves the server's lock_wait_timeout alone and makes a single attempt.
+	MetadataLockTimeouts []uint
+	// MetadataLockRetryDelay is the minimum pause between attempts; each pause is drawn
+	// uniformly from [delay, 2*delay).
+	MetadataLockRetryDelay time.Duration
 }
 
 type Mysql struct {
@@ -60,6 +66,10 @@ type Mysql struct {
 	isLocked atomic.Bool
 
 	config *Config
+
+	// sleep and jitter are swapped out by tests; nil means time.Sleep and rand.N.
+	sleep  func(time.Duration)
+	jitter func(time.Duration) time.Duration
 }
 
 // connection instance must have `multiStatements` set to true
@@ -259,22 +269,9 @@ func (m *Mysql) Open(url string) (database.Driver, error) {
 		}
 	}
 
-	metadataLockTimeoutParam := customParams["x-metadata-lock-timeout"]
-	metadataLockTimeout := uint64(0)
-	if metadataLockTimeoutParam != "" {
-		metadataLockTimeout, err = strconv.ParseUint(metadataLockTimeoutParam, 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("could not parse x-metadata-lock-timeout as uint: %w", err)
-		}
-	}
-
-	metadataLockRetriesParam := customParams["x-metadata-lock-retries"]
-	metadataLockRetries := uint64(0)
-	if metadataLockRetriesParam != "" {
-		metadataLockRetries, err = strconv.ParseUint(metadataLockRetriesParam, 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("could not parse x-metadata-lock-retries as uint: %w", err)
-		}
+	metadataLockTimeouts, metadataLockRetryDelay, err := metadataLockScheduleFromParams(customParams)
+	if err != nil {
+		return nil, err
 	}
 
 	db, err := sql.Open("mysql", config.FormatDSN())
@@ -283,18 +280,65 @@ func (m *Mysql) Open(url string) (database.Driver, error) {
 	}
 
 	mx, err := WithInstance(db, &Config{
-		DatabaseName:        config.DBName,
-		MigrationsTable:     customParams["x-migrations-table"],
-		NoLock:              noLock,
-		StatementTimeout:    time.Duration(statementTimeout) * time.Millisecond,
-		MetadataLockTimeout: uint(metadataLockTimeout),
-		MetadataLockRetries: uint(metadataLockRetries),
+		DatabaseName:           config.DBName,
+		MigrationsTable:        customParams["x-migrations-table"],
+		NoLock:                 noLock,
+		StatementTimeout:       time.Duration(statementTimeout) * time.Millisecond,
+		MetadataLockTimeouts:   metadataLockTimeouts,
+		MetadataLockRetryDelay: metadataLockRetryDelay,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	return mx, nil
+}
+
+// metadataLockScheduleFromParams reads x-metadata-lock-timeouts and x-metadata-lock-retry-delay.
+// The older x-metadata-lock-timeout and x-metadata-lock-retries pair is still accepted and
+// expands to its original flat schedule: retries+1 attempts of the same timeout, about 1s apart.
+func metadataLockScheduleFromParams(params map[string]string) ([]uint, time.Duration, error) {
+	legacyTimeout, legacyRetries := params["x-metadata-lock-timeout"], params["x-metadata-lock-retries"]
+	if legacyTimeout != "" || legacyRetries != "" {
+		if params["x-metadata-lock-timeouts"] != "" || params["x-metadata-lock-retry-delay"] != "" {
+			return nil, 0, fmt.Errorf("x-metadata-lock-timeout and x-metadata-lock-retries cannot be combined with x-metadata-lock-timeouts or x-metadata-lock-retry-delay")
+		}
+		if legacyTimeout == "" {
+			return nil, 0, nil
+		}
+		timeout, err := strconv.ParseUint(legacyTimeout, 10, 32)
+		if err != nil {
+			return nil, 0, fmt.Errorf("could not parse x-metadata-lock-timeout as uint: %w", err)
+		}
+		retries := uint64(0)
+		if legacyRetries != "" {
+			retries, err = strconv.ParseUint(legacyRetries, 10, 32)
+			if err != nil {
+				return nil, 0, fmt.Errorf("could not parse x-metadata-lock-retries as uint: %w", err)
+			}
+		}
+		if timeout == 0 {
+			return nil, 0, nil
+		}
+		timeouts := make([]uint, retries+1)
+		for i := range timeouts {
+			timeouts[i] = uint(timeout)
+		}
+		return timeouts, time.Second / 2, nil
+	}
+
+	timeouts, err := ParseMetadataLockTimeouts(params["x-metadata-lock-timeouts"])
+	if err != nil {
+		return nil, 0, fmt.Errorf("could not parse x-metadata-lock-timeouts: %w", err)
+	}
+	delay := time.Duration(0)
+	if raw := params["x-metadata-lock-retry-delay"]; raw != "" {
+		delay, err = time.ParseDuration(raw)
+		if err != nil {
+			return nil, 0, fmt.Errorf("could not parse x-metadata-lock-retry-delay as duration: %w", err)
+		}
+	}
+	return timeouts, delay, nil
 }
 
 func (m *Mysql) Close() error {
@@ -373,31 +417,90 @@ func (m *Mysql) Run(migration io.Reader) error {
 		defer cancel()
 	}
 
-	if m.config.MetadataLockTimeout != 0 {
-		query := "SET lock_wait_timeout=?"
-		if _, err := m.conn.ExecContext(ctx, query, m.config.MetadataLockTimeout); err != nil {
-			return &database.Error{OrigErr: err, Query: []byte(query)}
-		}
-	}
-
-	retries := uint(0)
-	for retries <= m.config.MetadataLockRetries {
-		query := string(migr[:])
-		if _, err := m.conn.ExecContext(ctx, query); err != nil {
-			// ERROR 1205: Lock wait timeout exceeded
-			if val, ok := err.(*mysql.MySQLError); ok && val.Number == 1205 {
-				log.Println("Failed to grab metadata lock after", m.config.MetadataLockTimeout, "seconds. Migration is retrying...")
-				retries++
-				// Queries can pile up behind the migration while waiting on the lock.
-				// Sleep for a second to give the DB a little breathing room.
-				time.Sleep(time.Second)
-				continue
-			}
+	exec := func() error {
+		if _, err := m.conn.ExecContext(ctx, string(migr)); err != nil {
 			return database.Error{OrigErr: err, Err: "migration failed", Query: migr}
 		}
 		return nil
 	}
-	return database.Error{Err: fmt.Sprint("Couldn't obtain metadata lock after ", m.config.MetadataLockRetries, " retries"), Query: migr}
+
+	if len(m.config.MetadataLockTimeouts) == 0 {
+		return exec()
+	}
+	return m.runWithMetadataLockRetries(migr, func(timeout uint) error {
+		query := "SET lock_wait_timeout=?"
+		if _, err := m.conn.ExecContext(ctx, query, timeout); err != nil {
+			return &database.Error{OrigErr: err, Query: []byte(query)}
+		}
+		return exec()
+	})
+}
+
+func (m *Mysql) runWithMetadataLockRetries(migr []byte, attempt func(timeout uint) error) error {
+	timeouts := m.config.MetadataLockTimeouts
+	for i, timeout := range timeouts {
+		err := attempt(timeout)
+		if !isLockWaitTimeout(err) {
+			return err
+		}
+		if i == len(timeouts)-1 {
+			break
+		}
+		pause := m.retryPause()
+		log.Printf("Failed to grab metadata lock within %ds (attempt %d of %d). Retrying in %s with a %ds timeout...",
+			timeout, i+1, len(timeouts), pause.Round(100*time.Millisecond), timeouts[i+1])
+		m.doSleep(pause)
+	}
+	return database.Error{
+		Err:   fmt.Sprintf("couldn't obtain metadata lock in %d attempts with timeouts of %v seconds", len(timeouts), timeouts),
+		Query: migr,
+	}
+}
+
+func isLockWaitTimeout(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1205
+}
+
+func (m *Mysql) retryPause() time.Duration {
+	delay := m.config.MetadataLockRetryDelay
+	if delay <= 0 {
+		return 0
+	}
+	jitter := m.jitter
+	if jitter == nil {
+		jitter = rand.N[time.Duration]
+	}
+	return delay + jitter(delay)
+}
+
+func (m *Mysql) doSleep(d time.Duration) {
+	if m.sleep != nil {
+		m.sleep(d)
+		return
+	}
+	time.Sleep(d)
+}
+
+// ParseMetadataLockTimeouts parses a comma-separated list of whole seconds, such as
+// "1,1,4,10", into a Config.MetadataLockTimeouts schedule. An empty string yields nil.
+func ParseMetadataLockTimeouts(s string) ([]uint, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(s, ",")
+	timeouts := make([]uint, 0, len(parts))
+	for _, part := range parts {
+		timeout, err := strconv.ParseUint(strings.TrimSpace(part), 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a whole number of seconds: %w", part, err)
+		}
+		if timeout == 0 {
+			return nil, fmt.Errorf("timeouts must be at least 1 second, got %q", s)
+		}
+		timeouts = append(timeouts, uint(timeout))
+	}
+	return timeouts, nil
 }
 
 func (m *Mysql) SetVersion(version int, dirty bool) error {
