@@ -25,3 +25,7 @@ func (e Error) Error() string {
 	}
 	return fmt.Sprintf("%v in line %v: %s (details: %v)", e.Err, e.Line, e.Query, e.OrigErr)
 }
+
+func (e Error) Unwrap() error {
+	return e.OrigErr
+}

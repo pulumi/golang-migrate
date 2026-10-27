@@ -17,6 +17,7 @@ On top of `upstream/master` (currently synced past the `v4.19.1` tag, up to upst
 | Commit subject | What it changes |
 |---|---|
 | Add metadata lock retries to the mysql driver | The actual feature patch. ~60 lines in `database/mysql/mysql.go`. Adds retry-on-`ER_LOCK_WAIT_TIMEOUT` behavior with configurable count and backoff. Default retry count is 0 (opt-in). |
+| Escalating metadata-lock retry schedule | Replaces the flat timeout × retry count with a per-attempt timeout list (`MetadataLockTimeouts`, `x-metadata-lock-timeouts`) and a jittered pause between attempts (`MetadataLockRetryDelay`), so retries start short and escalate instead of repeatedly stalling traffic for the full timeout. The old URL params still parse into an equivalent flat schedule. Adds `database.Error.Unwrap`. |
 | Restore make target behavior to what our existing scripts expect | Reshapes `build-cli` to a single output path via `$(CLI_BUILD_OUTPUT)`. Used by pulumi/service and pulumi-self-hosted-installers build scripts. |
 | Rename module path to github.com/pulumi/golang-migrate/v4 | Mechanical sed pass renaming the module. Re-run on every upstream sync (see below). |
 | Prune to mysql-only: drop non-mysql drivers and sources | Deletes all non-MySQL database drivers, non-`file`/`iofs`/`stub`/`testing` sources, the `internal/cli/build_*.go` build-tag registration files, and the deprecated `cli/` package. Hardcodes mysql + file imports directly in `cmd/migrate/main.go`. |
