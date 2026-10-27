@@ -167,7 +167,7 @@ func TestRunWithMetadataLockRetries(t *testing.T) {
 		attempt, seen := scripted(lockErr, lockErr, lockErr, lockErr)
 
 		err := m.runWithMetadataLockRetries(migr, attempt)
-		assert.ErrorContains(t, err, "couldn't obtain metadata lock in 4 attempts with timeouts of [1 1 4 10] seconds")
+		assert.ErrorContains(t, err, "couldn't obtain metadata lock in 4 attempts with timeouts of 1s, 1s, 4s, 10s.")
 		assert.Equal(t, []uint{1, 1, 4, 10}, *seen)
 		assert.Len(t, *slept, 3, "no pause after the last attempt")
 	})
@@ -178,7 +178,15 @@ func TestRunWithMetadataLockRetries(t *testing.T) {
 		attempt, _ := scripted(lockErr, lockErr)
 
 		err := m.runWithMetadataLockRetries(migr, attempt)
-		assert.ErrorContains(t, err, "timeouts of [1 1] seconds. See https://example.com/doc#locks")
+		assert.ErrorContains(t, err, "timeouts of 1s, 1s. See https://example.com/doc#locks")
+	})
+
+	t.Run("describes a zero entry as the server default", func(t *testing.T) {
+		m, _ := fakeRetries([]uint{0, 0}, 0)
+		attempt, _ := scripted(lockErr, lockErr)
+
+		err := m.runWithMetadataLockRetries(migr, attempt)
+		assert.ErrorContains(t, err, "timeouts of the server's lock_wait_timeout, the server's lock_wait_timeout.")
 	})
 
 	t.Run("returns other errors without retrying", func(t *testing.T) {

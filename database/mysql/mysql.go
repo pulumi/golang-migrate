@@ -470,15 +470,31 @@ func (m *Mysql) runWithMetadataLockRetries(migr []byte, attempt func(timeout uin
 			break
 		}
 		pause := m.retryPause()
-		log.Printf("Failed to grab metadata lock within %ds (attempt %d of %d). Retrying in %s with a %ds timeout.%s",
-			timeout, i+1, len(timeouts), pause.Round(100*time.Millisecond), timeouts[i+1], m.helpSuffix())
+		log.Printf("Failed to grab metadata lock within %s (attempt %d of %d). Retrying in %s with a timeout of %s.%s",
+			describeLockWaitTimeout(timeout), i+1, len(timeouts), pause.Round(100*time.Millisecond),
+			describeLockWaitTimeout(timeouts[i+1]), m.helpSuffix())
 		m.doSleep(pause)
 	}
 	return database.Error{
-		Err: fmt.Sprintf("couldn't obtain metadata lock in %d attempts with timeouts of %v seconds.%s",
-			len(timeouts), timeouts, m.helpSuffix()),
+		Err: fmt.Sprintf("couldn't obtain metadata lock in %d attempts with timeouts of %s.%s",
+			len(timeouts), describeLockWaitTimeouts(timeouts), m.helpSuffix()),
 		Query: migr,
 	}
+}
+
+func describeLockWaitTimeout(timeout uint) string {
+	if timeout == 0 {
+		return "the server's lock_wait_timeout"
+	}
+	return fmt.Sprintf("%ds", timeout)
+}
+
+func describeLockWaitTimeouts(timeouts []uint) string {
+	described := make([]string, len(timeouts))
+	for i, timeout := range timeouts {
+		described[i] = describeLockWaitTimeout(timeout)
+	}
+	return strings.Join(described, ", ")
 }
 
 func (m *Mysql) helpSuffix() string {
