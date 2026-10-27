@@ -17,6 +17,7 @@ import (
 	"math/rand/v2"
 	nurl "net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -51,7 +52,8 @@ type Config struct {
 	// MetadataLockTimeouts is the lock_wait_timeout, in seconds, for each attempt at a
 	// migration file: an attempt that times out on a metadata lock (ER_LOCK_WAIT_TIMEOUT)
 	// moves on to the next entry, and the file fails once the list is exhausted. Empty
-	// leaves the server's lock_wait_timeout alone and makes a single attempt.
+	// leaves the server's lock_wait_timeout alone and makes a single attempt. An entry of 0
+	// skips setting lock_wait_timeout for that attempt.
 	MetadataLockTimeouts []uint
 	// MetadataLockRetryDelay is the minimum pause between attempts; each pause is drawn
 	// uniformly from [delay, 2*delay).
@@ -306,26 +308,23 @@ func metadataLockScheduleFromParams(params map[string]string) ([]uint, time.Dura
 		if params["x-metadata-lock-timeouts"] != "" || params["x-metadata-lock-retry-delay"] != "" {
 			return nil, 0, fmt.Errorf("x-metadata-lock-timeout and x-metadata-lock-retries cannot be combined with x-metadata-lock-timeouts or x-metadata-lock-retry-delay")
 		}
-		if legacyTimeout == "" {
-			return nil, 0, nil
+		timeout, retries := uint64(0), uint64(0)
+		var err error
+		if legacyTimeout != "" {
+			timeout, err = strconv.ParseUint(legacyTimeout, 10, 32)
+			if err != nil {
+				return nil, 0, fmt.Errorf("could not parse x-metadata-lock-timeout as uint: %w", err)
+			}
 		}
-		timeout, err := strconv.ParseUint(legacyTimeout, 10, 32)
-		if err != nil {
-			return nil, 0, fmt.Errorf("could not parse x-metadata-lock-timeout as uint: %w", err)
-		}
-		retries := uint64(0)
 		if legacyRetries != "" {
 			retries, err = strconv.ParseUint(legacyRetries, 10, 32)
 			if err != nil {
 				return nil, 0, fmt.Errorf("could not parse x-metadata-lock-retries as uint: %w", err)
 			}
 		}
-		if timeout == 0 {
-			return nil, 0, nil
-		}
-		timeouts := make([]uint, retries+1)
-		for i := range timeouts {
-			timeouts[i] = uint(timeout)
+		timeouts, err := FlatMetadataLockTimeouts(uint(timeout), uint(retries))
+		if err != nil {
+			return nil, 0, fmt.Errorf("x-metadata-lock-retries: %w", err)
 		}
 		return timeouts, time.Second / 2, nil
 	}
@@ -342,6 +341,23 @@ func metadataLockScheduleFromParams(params map[string]string) ([]uint, time.Dura
 		}
 	}
 	return timeouts, delay, nil
+}
+
+// MaxFlatMetadataLockRetries bounds FlatMetadataLockTimeouts, which materializes one
+// schedule entry per attempt.
+const MaxFlatMetadataLockRetries = 1000
+
+// FlatMetadataLockTimeouts builds the schedule of the older timeout-and-retry-count
+// settings: retries+1 attempts of the same timeout, where 0 keeps the server's
+// lock_wait_timeout. It returns nil when there is nothing to retry.
+func FlatMetadataLockTimeouts(timeout, retries uint) ([]uint, error) {
+	if retries > MaxFlatMetadataLockRetries {
+		return nil, fmt.Errorf("retries must be at most %d, got %d", MaxFlatMetadataLockRetries, retries)
+	}
+	if timeout == 0 && retries == 0 {
+		return nil, nil
+	}
+	return slices.Repeat([]uint{timeout}, int(retries)+1), nil
 }
 
 func (m *Mysql) Close() error {
@@ -413,6 +429,17 @@ func (m *Mysql) Run(migration io.Reader) error {
 		return err
 	}
 
+	if len(m.config.MetadataLockTimeouts) == 0 {
+		return m.runOnce(migr, 0)
+	}
+	return m.runWithMetadataLockRetries(migr, func(timeout uint) error {
+		return m.runOnce(migr, timeout)
+	})
+}
+
+// runOnce makes one attempt at a migration under its own StatementTimeout, first setting
+// lock_wait_timeout unless timeout is 0.
+func (m *Mysql) runOnce(migr []byte, timeout uint) error {
 	ctx := context.Background()
 	if m.config.StatementTimeout != 0 {
 		var cancel context.CancelFunc
@@ -420,23 +447,16 @@ func (m *Mysql) Run(migration io.Reader) error {
 		defer cancel()
 	}
 
-	exec := func() error {
-		if _, err := m.conn.ExecContext(ctx, string(migr)); err != nil {
-			return database.Error{OrigErr: err, Err: "migration failed", Query: migr}
-		}
-		return nil
-	}
-
-	if len(m.config.MetadataLockTimeouts) == 0 {
-		return exec()
-	}
-	return m.runWithMetadataLockRetries(migr, func(timeout uint) error {
+	if timeout != 0 {
 		query := "SET lock_wait_timeout=?"
 		if _, err := m.conn.ExecContext(ctx, query, timeout); err != nil {
 			return &database.Error{OrigErr: err, Query: []byte(query)}
 		}
-		return exec()
-	})
+	}
+	if _, err := m.conn.ExecContext(ctx, string(migr)); err != nil {
+		return database.Error{OrigErr: err, Err: "migration failed", Query: migr}
+	}
+	return nil
 }
 
 func (m *Mysql) runWithMetadataLockRetries(migr []byte, attempt func(timeout uint) error) error {

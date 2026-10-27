@@ -89,8 +89,26 @@ func TestMetadataLockScheduleFromParams(t *testing.T) {
 			wantDelay: time.Second / 2,
 		},
 		{
-			name:   "legacy zero timeout leaves the server default",
-			params: map[string]string{"x-metadata-lock-timeout": "0", "x-metadata-lock-retries": "20"},
+			name:      "legacy zero timeout retries under the server default",
+			params:    map[string]string{"x-metadata-lock-timeout": "0", "x-metadata-lock-retries": "2"},
+			wantTimes: []uint{0, 0, 0},
+			wantDelay: time.Second / 2,
+		},
+		{
+			name:      "legacy retries alone retry under the server default",
+			params:    map[string]string{"x-metadata-lock-retries": "1"},
+			wantTimes: []uint{0, 0},
+			wantDelay: time.Second / 2,
+		},
+		{
+			name:      "legacy zero timeout and no retries is a single attempt",
+			params:    map[string]string{"x-metadata-lock-timeout": "0"},
+			wantDelay: time.Second / 2,
+		},
+		{
+			name:    "legacy retries are bounded",
+			params:  map[string]string{"x-metadata-lock-timeout": "4", "x-metadata-lock-retries": "4294967295"},
+			wantErr: "at most 1000",
 		},
 		{
 			name:    "legacy and new together",
@@ -224,6 +242,17 @@ func TestMetadataLockRetriesAgainstHeldLock(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = d.Close() })
 		m := d.(*Mysql)
+
+		t.Run("statement timeout bounds each attempt, not the schedule", func(t *testing.T) {
+			d, err := (&Mysql{}).Open(addr + "?x-metadata-lock-timeouts=1,1,1&x-metadata-lock-retry-delay=1s&x-statement-timeout=2500")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = d.Close() })
+			tx := holdLock()
+			defer func() { _ = tx.Rollback() }()
+
+			err = d.(*Mysql).Run(bytes.NewBufferString("ALTER TABLE held ADD COLUMN s INT"))
+			assert.ErrorContains(t, err, "couldn't obtain metadata lock in 3 attempts")
+		})
 
 		t.Run("gives up after the last timeout", func(t *testing.T) {
 			tx := holdLock()

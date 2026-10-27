@@ -10,7 +10,7 @@
 | `x-metadata-lock-timeouts` | `MetadataLockTimeouts` | Comma-separated `lock_wait_timeout` seconds, one per attempt, e.g. `1,1,4,10`. An attempt that fails with `ER_LOCK_WAIT_TIMEOUT` is retried with the next timeout; the migration fails once the list is exhausted. Unset makes one attempt under the server's `lock_wait_timeout`. |
 | `x-metadata-lock-retry-delay` | `MetadataLockRetryDelay` | Minimum pause between those attempts as a Go duration, e.g. `30s`; each pause is jittered uniformly up to twice that. |
 | | `MetadataLockHelpURL` | Optional link appended to the metadata-lock retry log lines and to the error when the attempts run out. |
-| `x-metadata-lock-timeout`, `x-metadata-lock-retries` | | Deprecated: equivalent to `x-metadata-lock-timeouts` repeating one timeout `retries+1` times, with a 0.5s retry delay. |
+| `x-metadata-lock-timeout`, `x-metadata-lock-retries` | | Deprecated: equivalent to `x-metadata-lock-timeouts` repeating one timeout `retries+1` times, with a 0.5s retry delay. A timeout of 0 or unset keeps the server's `lock_wait_timeout` on each attempt, as before. `retries` is capped at 1000. |
 | `dbname` | `DatabaseName` | The name of the database to connect to |
 | `user` | | The user to sign in as |
 | `password` | | The user's password | 
