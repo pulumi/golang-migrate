@@ -22,9 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # testcontainers-go requires Go >= 1.25; dropped 1.24.x from the matrix
-        # when the mysql package switched onto it.
-        go: ["1.25.x", "1.26.x"]
+        # go.mod requires Go >= 1.26 (golang.org/x/sys, x/crypto and otel need it).
+        go: ["1.26.x", "1.27.x"]
     steps:
       - uses: actions/checkout@v4
 
